@@ -1,0 +1,7 @@
+# 加入 dashboard 的 iframe 卡片 / iframe card for your dashboard
+type: iframe
+url: /local/buseta/bus_eta.html
+title: 巴士預計到站時間
+grid_options:
+  columns: full
+  rows: 8

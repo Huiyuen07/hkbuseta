@@ -1,0 +1,5 @@
+# 個人站點設定（會透露住址）/ personal stops reveal where you live
+www/config.json
+
+node_modules/
+*.log
