@@ -117,8 +117,6 @@ npm test
 
 只需 Node.js 22 或以上，沒有其他依賴。
 
-後續工作見 [IMPROVEMENTS.md](IMPROVEMENTS.md)。
-
 ### 授權
 
 [MIT](LICENSE)
@@ -239,8 +237,6 @@ npm test
 ```
 
 Requires Node.js 22 or later, with no other dependencies.
-
-See [IMPROVEMENTS.md](IMPROVEMENTS.md) for planned work.
 
 ### License
 

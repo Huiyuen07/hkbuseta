@@ -108,7 +108,7 @@ test("fetchRows combines KMB stops and every Citybus route", async () => {
   );
 });
 
-const CTB_ETA_56 = "https://rt.data.gov.hk/v2/transport/citybus/eta/ctb/CTB1/42";
+const CTB_ETA_42 = "https://rt.data.gov.hk/v2/transport/citybus/eta/ctb/CTB1/42";
 const KMB_ETA = "https://data.etabus.gov.hk/v1/transport/kmb/stop-eta/KMB1/";
 const BOTH_WAYS = [
   { route: "42", dir: "I", dest_tc: "East", eta: inMinutes(3) },
@@ -123,13 +123,13 @@ const destinations = async (rows) => (await rows).map((row) => row.destination);
 
 test("a route saved with a direction shows only that direction at a shared stop", async () => {
   const stop = { ...CTB_STOP, routes: [{ route: "42", dir: "I" }] };
-  const { rows } = load(stop, { [CTB_ETA_56]: BOTH_WAYS });
+  const { rows } = load(stop, { [CTB_ETA_42]: BOTH_WAYS });
   assert.deepEqual(await destinations(rows), ["East"]);
 });
 
 test("a route saved without a direction still shows both directions", async () => {
   for (const route of ["42", 42, { route: "42" }]) {
-    const { rows } = load({ ...CTB_STOP, routes: [route] }, { [CTB_ETA_56]: BOTH_WAYS });
+    const { rows } = load({ ...CTB_STOP, routes: [route] }, { [CTB_ETA_42]: BOTH_WAYS });
     assert.deepEqual(await destinations(rows), ["East", "West"]);
   }
 });
@@ -139,7 +139,7 @@ test("both directions of one route are fetched once and each row appears once", 
     { route: "42", dir: "I" },
     { route: "42", dir: "O" },
   ];
-  const { rows, calls } = load({ ...CTB_STOP, routes }, { [CTB_ETA_56]: BOTH_WAYS });
+  const { rows, calls } = load({ ...CTB_STOP, routes }, { [CTB_ETA_42]: BOTH_WAYS });
   assert.equal((await rows).length, 2);
   assert.equal(calls.length, 1);
 });
