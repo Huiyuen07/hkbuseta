@@ -39,7 +39,7 @@ function setPageHidden(hidden) {
   for (const listener of pageListeners) listener();
 }
 
-await import("../www/buseta-card.js");
+await import("../dist/buseta-card.js");
 const BusetaCard = defined.get("buseta-card");
 
 const STOP = { operator: "kmb", stop_id: "KMB1" };

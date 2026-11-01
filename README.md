@@ -6,6 +6,8 @@
 
 Home Assistant 的 Lovelace 卡片，以時間軸顯示香港巴士預計到站時間，支援九巴（KMB）和城巴（Citybus）。卡片會標示出門來不及的班次，並提供四款配色。
 
+![巴士到站卡片](images/card.png)
+
 資料來自政府開放數據 API，由瀏覽器直接讀取，不需要 API key、整合或背景服務。
 
 ### 安裝
@@ -16,7 +18,7 @@ Home Assistant 的 Lovelace 卡片，以時間軸顯示香港巴士預計到站�
    ./deploy.sh <ssh-host>
    ```
 
-   指令最後會印出資源網址。沒有 SSH 的話，把 `www/` 內的四個 `.js` 檔複製到 `/config/www/buseta/`，資源網址就是 `/local/buseta/buseta-card.js`。
+   指令最後會印出資源網址。沒有 SSH 的話，把 `dist/` 內的四個 `.js` 檔複製到 `/config/www/buseta/`，資源網址就是 `/local/buseta/buseta-card.js`。
 
 2. 加入資源：到「設定 → 儀表板 → 右上角選單 → 資源」新增上述網址，類型選「JavaScript 模組」。
 
@@ -127,6 +129,8 @@ npm test
 
 A Lovelace card for Home Assistant that shows Hong Kong bus arrivals on a time axis. It covers KMB and Citybus, marks buses you may be too late for, and comes in four color schemes.
 
+![Bus arrival card](images/card.png)
+
 Data comes from the government's open data APIs and is read directly by the browser. It needs no API key, integration or background service.
 
 ### Install
@@ -137,7 +141,7 @@ Data comes from the government's open data APIs and is read directly by the brow
    ./deploy.sh <ssh-host>
    ```
 
-   The command ends by printing the resource URL. Without SSH, copy the four `.js` files in `www/` to `/config/www/buseta/`. The resource URL is then `/local/buseta/buseta-card.js`.
+   The command ends by printing the resource URL. Without SSH, copy the four `.js` files in `dist/` to `/config/www/buseta/`. The resource URL is then `/local/buseta/buseta-card.js`.
 
 2. Add the resource: go to Settings → Dashboards → top-right menu → Resources, add that URL, and choose JavaScript module.
 

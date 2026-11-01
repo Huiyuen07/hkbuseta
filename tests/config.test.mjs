@@ -16,7 +16,7 @@ import {
   routeLabel,
   setHidden,
   stopOptions,
-} from "../www/buseta-config.js";
+} from "../dist/buseta-config.js";
 
 const fakeFetch = (routes) => async (url) => {
   if (!(url in routes)) return { ok: false, status: 404 };
@@ -34,7 +34,7 @@ const HOME = { latitude: 22.3, longitude: 114.17 };
 let copies = 0;
 const freshConfig = () => {
   copies += 1;
-  return import(`../www/buseta-config.js?copy=${copies}`);
+  return import(`../dist/buseta-config.js?copy=${copies}`);
 };
 
 const kmbRoute = (route, bound, service_type, orig_tc, dest_tc) => ({

@@ -13,7 +13,7 @@ import {
   staggerDepartures,
   toRow,
   validateConfig,
-} from "../www/buseta.js";
+} from "../dist/buseta.js";
 
 const NOW = new Date("2026-01-01T12:00:00+08:00");
 const inMinutes = (minutes) => new Date(NOW.getTime() + minutes * 60000).toISOString();
