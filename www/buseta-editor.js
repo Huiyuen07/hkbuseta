@@ -2,7 +2,8 @@
 // Uses plain form controls: HA's own elements are lazy-loaded and change between releases.
 
 const version = new URL(import.meta.url).search;
-const { COLOR_SCHEMES, DEFAULTS, OPERATORS, escapeHtml, withNames } = await import(`./buseta.js${version}`);
+const { COLOR_SCHEMES, DEFAULTS, MIN_REFRESH_SECONDS, OPERATORS, escapeHtml, withNames } =
+  await import(`./buseta.js${version}`);
 const {
   addStop,
   addedRoutes,
@@ -19,7 +20,6 @@ const {
   setHidden,
 } = await import(`./buseta-config.js${version}`);
 
-const MIN_REFRESH_SECONDS = 10;
 const MIN_ROWS = 2;
 const MIN_COLUMNS = 1;
 const DEFAULT_ROWS = 8;

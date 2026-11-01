@@ -41,7 +41,8 @@ Home Assistant 的 Lovelace 卡片，以時間軸顯示香港巴士預計到站�
 - 實心圓點是實時班次，虛線圓點是營運商標明的「原定班次」，空心圓點在出門時間內。出門時間內的原定班次是灰色虛線。
 - 圓點太近時會縮小，並在軌道上下錯開。卡片改變寬度後，下次更新才會重新排列。
 - 營運商的其他備註顯示在該條軌道下方。
-- 底部顯示最後更新時間。更新失敗或 15 秒內沒有回應時，會顯示「更新失敗」，並保留上次的班次。
+- 底部顯示最後更新時間。某個站更新失敗或 15 秒內沒有回應時，其他站照常更新，底部會列出失敗的站。
+- 失敗的站沿用上次的班次，分鐘數會繼續倒數，到站的班次會消失。
 - 頁面隱藏時暫停更新，回到頁面時立即更新。
 
 更新版本後，把資源網址的 `?v=` 改為 `deploy.sh` 印出的新值，瀏覽器才會載入新版。
@@ -60,8 +61,8 @@ Home Assistant 的 Lovelace 卡片，以時間軸顯示香港巴士預計到站�
 | 欄位 | 說明 | 預設值 |
 |------|------|--------|
 | `title` | 卡片標題 | 無 |
-| `refresh_seconds` | 更新間隔（秒） | `30` |
-| `max_minutes` | 只顯示此分鐘數內到站的班次，也是時間軸的長度 | `30` |
+| `refresh_seconds` | 更新間隔（秒），最少 `10` | `30` |
+| `max_minutes` | 只顯示此分鐘數內到站的班次，也是時間軸的長度，最少 `1` | `30` |
 | `leave_minutes` | 出門時間（分鐘），`0` 為關閉 | `5` |
 | `color_scheme` | 配色：`auto`、`mono`、`led`、`icehouse` | `auto` |
 | `grid_options` | HA 的卡片大小設定：`columns`（欄）和 `rows`（行） | 全寬、8 行 |
@@ -161,7 +162,8 @@ Data comes from the government's open data APIs and is read directly by the brow
 - A solid dot is a live departure, a dashed dot is one the operator marks as scheduled (「原定班次」), and a hollow dot is inside your leaving time. A scheduled departure inside your leaving time is gray and dashed.
 - Dots that are too close shrink and move above and below the track. After the card changes width, they rearrange at the next update.
 - Other operator remarks appear under the track.
-- The footer shows the last update time. If an update fails or gets no response within 15 seconds, it shows 「更新失敗」 (update failed) and keeps the last buses on screen.
+- The footer shows the last update time. If a stop fails or gets no response within 15 seconds, the other stops still update and the footer names the failed stop with 「更新失敗」 (update failed).
+- A failed stop keeps its last buses. Their minutes keep counting down, and buses that have arrived disappear.
 - Updates pause while the page is hidden and run at once when you return.
 
 After an update, change the `?v=` in the resource URL to the new value printed by `deploy.sh`, so browsers load the new version.
@@ -180,8 +182,8 @@ After an update, change the `?v=` in the resource URL to the new value printed b
 | Field | Meaning | Default |
 |-------|---------|---------|
 | `title` | Card title | None |
-| `refresh_seconds` | Refresh interval in seconds | `30` |
-| `max_minutes` | Only show buses arriving within this many minutes. Also the length of the time axis | `30` |
+| `refresh_seconds` | Refresh interval in seconds, at least `10` | `30` |
+| `max_minutes` | Only show buses arriving within this many minutes, at least `1`. Also the length of the time axis | `30` |
 | `leave_minutes` | Leaving time in minutes. `0` turns it off | `5` |
 | `color_scheme` | Color scheme: `auto`, `mono`, `led` or `icehouse` | `auto` |
 | `grid_options` | HA's card size: `columns` and `rows` | Full width, 8 rows |

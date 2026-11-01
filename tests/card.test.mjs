@@ -519,3 +519,90 @@ test("the editor says when some Citybus stops could not be loaded", async () => 
   assert.match(add, /First/);
   assert.match(add, /1 個站牌/);
 });
+
+const STOP_B = { operator: "kmb", stop_id: "KMB2" };
+
+// KMB1 answers normally. The stop `failing` fails, under the name given.
+function oneStopFails(records, failing = "KMB2", name = "Stop B") {
+  globalThis.fetch = async (url) => {
+    if (url.endsWith("/stop/KMB1")) return { ok: true, json: async () => ({ data: { name_tc: "Stop A" } }) };
+    if (url.endsWith(`/stop/${failing}`)) return { ok: true, json: async () => ({ data: { name_tc: name } }) };
+    if (url.includes(`/stop-eta/${failing}/`)) return { ok: false, status: 500 };
+    return { ok: true, json: async () => ({ data: records }) };
+  };
+}
+
+test("a stop that fails leaves the others showing and is named in the footer", async () => {
+  oneStopFails([k1(5)]);
+  const logged = mock.method(console, "error", () => {});
+  const card = await showCard({ stops: [STOP, STOP_B] });
+  assert.match(body(card), /Kowloon/);
+  assert.match(foot(card), /Stop B 更新失敗/);
+  logged.mock.restore();
+  card.disconnectedCallback();
+});
+
+test("the name of a failed stop is escaped in the footer", async () => {
+  oneStopFails([k1(5)], "KMB3", "<b>Odd</b>");
+  const logged = mock.method(console, "error", () => {});
+  const card = await showCard({ stops: [STOP, { ...STOP_B, stop_id: "KMB3" }] });
+  assert.match(foot(card), /&lt;b&gt;Odd&lt;\/b&gt; 更新失敗/);
+  logged.mock.restore();
+  card.disconnectedCallback();
+});
+
+test("a stop with several failed routes is named once", async () => {
+  globalThis.fetch = async (url) => {
+    if (url.endsWith("/stop/CTB1")) return { ok: true, json: async () => ({ data: { name_tc: "Pier" } }) };
+    if (url.endsWith("/stop/KMB1")) return { ok: true, json: async () => ({ data: { name_tc: "Stop A" } }) };
+    if (url.includes("/eta/ctb/")) return { ok: false, status: 500 };
+    return { ok: true, json: async () => ({ data: [k1(5)] }) };
+  };
+  const logged = mock.method(console, "error", () => {});
+  const ctb = { operator: "ctb", stop_id: "CTB1", routes: ["1", "2"] };
+  const card = await showCard({ stops: [STOP, ctb] });
+  assert.equal(foot(card).match(/Pier/g).length, 1);
+  logged.mock.restore();
+  card.disconnectedCallback();
+});
+
+test("buses from the last good update count down while updates fail", async () => {
+  mock.timers.reset();
+  mock.timers.enable({ apis: ["setInterval", "Date"], now: Date.now() });
+  respondWith([k1(9)]);
+  const card = await showCard({ refresh_seconds: 10 });
+  assert.match(body(card), />9</);
+  const updated = foot(card).match(/更新於 \d\d:\d\d/)[0];
+  globalThis.fetch = async () => ({ ok: false, status: 500 });
+  const logged = mock.method(console, "error", () => {});
+  mock.timers.tick(120000);
+  await settle();
+  assert.match(body(card), />7</);
+  assert.ok(foot(card).includes(updated), "the time should stay at the last good update");
+  assert.match(foot(card), /更新失敗/);
+  logged.mock.restore();
+  card.disconnectedCallback();
+});
+
+test("once the remembered buses have passed, failing updates say so", async () => {
+  mock.timers.reset();
+  mock.timers.enable({ apis: ["setInterval", "Date"], now: Date.now() });
+  respondWith([k1(1)]);
+  const card = await showCard({ refresh_seconds: 10 });
+  globalThis.fetch = async () => ({ ok: false, status: 500 });
+  const logged = mock.method(console, "error", () => {});
+  mock.timers.tick(120000);
+  await settle();
+  assert.match(body(card), /無法取得班次/);
+  logged.mock.restore();
+  card.disconnectedCallback();
+});
+
+test("every failed request is logged", async () => {
+  oneStopFails([k1(5)]);
+  const logged = mock.method(console, "error", () => {});
+  const card = await showCard({ stops: [STOP, STOP_B] });
+  assert.equal(logged.mock.callCount(), 1);
+  logged.mock.restore();
+  card.disconnectedCallback();
+});

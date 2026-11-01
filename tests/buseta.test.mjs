@@ -95,7 +95,7 @@ test("fetchRows combines KMB stops and every Citybus route", async () => {
     ],
   });
   const config = validateConfig({ stops: [KMB_STOP, CTB_STOP] });
-  const rows = await fetchRows(config, { fetchFn, now: () => NOW });
+  const { rows } = await fetchRows(config, { fetchFn, now: () => NOW });
 
   assert.equal(calls.length, 5); // two stop names, then three lots of arrivals
   assert.deepEqual(
@@ -117,7 +117,7 @@ const BOTH_WAYS = [
 const load = (stop, routes) => {
   const { fetchFn, calls } = fakeFetch(routes);
   const config = validateConfig({ stops: [stop] });
-  return { calls, rows: fetchRows(config, { fetchFn, now: () => NOW }) };
+  return { calls, rows: fetchRows(config, { fetchFn, now: () => NOW }).then(({ rows }) => rows) };
 };
 const destinations = async (rows) => (await rows).map((row) => row.destination);
 
@@ -178,10 +178,12 @@ test("a saved service_type picks one destination of a KMB departure", async () =
   assert.deepEqual(await destinations(rows), ["Uptown"]);
 });
 
-test("fetchRows rejects on HTTP errors", async () => {
+test("fetchRows reports HTTP errors instead of giving up", async () => {
   const { fetchFn } = fakeFetch({});
   const config = validateConfig({ stops: [KMB_STOP] });
-  await assert.rejects(fetchRows(config, { fetchFn, now: () => NOW }), /HTTP 404/);
+  const { failures, allFailed } = await fetchRows(config, { fetchFn, now: () => NOW });
+  assert.match(failures[0].error.message, /HTTP 404/);
+  assert.equal(allFailed, true);
 });
 
 test("validateConfig fills in defaults", () => {
@@ -257,7 +259,7 @@ test("brackets that belong to a stop name stay", () => {
 
 const nameOnBoard = async (stop, routes) => {
   const { fetchFn, calls } = fakeFetch(routes);
-  const rows = await fetchRows(validateConfig({ stops: [stop] }), { fetchFn, now: () => NOW });
+  const { rows } = await fetchRows(validateConfig({ stops: [stop] }), { fetchFn, now: () => NOW });
   return { name: rows[0]?.stopName, calls };
 };
 const ETAS = (url) => ({ [url]: [{ route: "1", dir: "O", dest_tc: "X", eta: inMinutes(5) }] });
@@ -573,7 +575,7 @@ test("a stop name that never answers does not hold back the arrivals", async () 
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(etaRequests.length, 1);
   mock.timers.tick(60000);
-  const [row] = await rows;
+  const { rows: [row] } = await rows;
   mock.timers.reset();
   assert.equal(row.route, "1");
   assert.equal(row.stopName, "");
@@ -595,7 +597,7 @@ test("a stop name that arrives late shows on the next update", async () => {
   mock.timers.tick(60000);
   await first;
   answerName();
-  const [row] = await fetchRows(config, { fetchFn });
+  const { rows: [row] } = await fetchRows(config, { fetchFn });
   mock.timers.reset();
   assert.equal(row.stopName, "Late");
 });
@@ -617,4 +619,103 @@ test("an exclude rule by service_type can keep the other destination of a depart
   ];
   const kept = selectRows(rows, { exclude: [{ route: "68K", service_type: 1 }], max_minutes: 30 });
   assert.deepEqual(kept.map((row) => row.destination), ["Uptown"]);
+});
+
+for (const value of [0, 9, -5, "30", "abc", null, NaN, Infinity]) {
+  test(`validateConfig rejects a refresh of ${JSON.stringify(value) ?? value}`, () => {
+    assert.throws(() => validateConfig({ refresh_seconds: value }), /refresh_seconds/);
+  });
+}
+
+test("validateConfig accepts the shortest refresh the editor allows", () => {
+  assert.equal(validateConfig({ refresh_seconds: 10 }).refresh_seconds, 10);
+});
+
+for (const value of [0, -5, "30", "abc", null, NaN]) {
+  test(`validateConfig rejects a time axis of ${JSON.stringify(value) ?? value}`, () => {
+    assert.throws(() => validateConfig({ max_minutes: value }), /max_minutes/);
+  });
+}
+
+test("validateConfig accepts a one minute time axis", () => {
+  assert.equal(validateConfig({ max_minutes: 1 }).max_minutes, 1);
+});
+
+test("validateConfig rejects a leaving time written as text", () => {
+  assert.throws(() => validateConfig({ leave_minutes: "5" }), /leave_minutes/);
+});
+
+const clock = (minutes) => new Date(NOW.getTime() + minutes * 60000);
+const answer = (data) => ({ ok: true, json: async () => ({ data }) });
+const twoStops = validateConfig({
+  stops: [
+    { operator: "kmb", stop_id: "OK1" },
+    { operator: "kmb", stop_id: "OFF1" },
+  ],
+});
+const busAt = (minutes, route = "1") => ({ route, dir: "O", dest_tc: "X", eta: inMinutes(minutes) });
+
+// Answers each stop with its entry in `etas`: records, or null for HTTP 500.
+const stopsAnswer = (etas) => async (url) => {
+  const stop = Object.keys(etas).find((id) => url.includes(`/stop-eta/${id}/`));
+  if (stop === undefined) return answer({ name_tc: url.includes("OK") ? "Open" : "Closed" });
+  return etas[stop] ? answer(etas[stop]) : { ok: false, status: 500 };
+};
+
+test("a stop that fails does not stop the others from updating", async () => {
+  const fetchFn = stopsAnswer({ OK1: [busAt(5)], OFF1: null });
+  const { rows, failures, allFailed } = await fetchRows(twoStops, { fetchFn, now: () => NOW });
+  assert.deepEqual(rows.map((row) => row.stopName), ["Open"]);
+  assert.deepEqual(failures.map((failure) => failure.stop), ["Closed"]);
+  assert.equal(allFailed, false);
+});
+
+test("a failed stop keeps its last good buses, with the minutes brought up to date", async () => {
+  const memory = new Map();
+  const first = stopsAnswer({ OK1: [], OFF1: [busAt(10)] });
+  await fetchRows(twoStops, { fetchFn: first, now: () => NOW, memory });
+  const second = stopsAnswer({ OK1: [], OFF1: null });
+  const { rows } = await fetchRows(twoStops, { fetchFn: second, now: () => clock(3), memory });
+  assert.deepEqual(rows.map((row) => row.remainingMinutes), [7]);
+});
+
+test("a remembered bus disappears once its time has passed", async () => {
+  const memory = new Map();
+  const first = stopsAnswer({ OK1: [], OFF1: [busAt(10)] });
+  await fetchRows(twoStops, { fetchFn: first, now: () => NOW, memory });
+  const second = stopsAnswer({ OK1: [], OFF1: null });
+  const { rows } = await fetchRows(twoStops, { fetchFn: second, now: () => clock(11), memory });
+  assert.deepEqual(rows, []);
+});
+
+test("a good answer replaces what was remembered", async () => {
+  const memory = new Map();
+  const answers = [
+    { OK1: [], OFF1: [busAt(10, "OLD")] },
+    { OK1: [], OFF1: [busAt(12, "NEW")] },
+    { OK1: [], OFF1: null },
+  ];
+  let result;
+  for (const etas of answers) {
+    result = await fetchRows(twoStops, { fetchFn: stopsAnswer(etas), now: () => NOW, memory });
+  }
+  assert.deepEqual(result.rows.map((row) => row.route), ["NEW"]);
+});
+
+test("allFailed is set only when every request failed", async () => {
+  const fetchFn = stopsAnswer({ OK1: null, OFF1: null });
+  assert.equal((await fetchRows(twoStops, { fetchFn, now: () => NOW })).allFailed, true);
+});
+
+test("a card with no stops has not failed", async () => {
+  const { allFailed } = await fetchRows(validateConfig({}), { fetchFn: stopsAnswer({}), now: () => NOW });
+  assert.equal(allFailed, false);
+});
+
+test("an answer with no data counts as a failure, not as no buses", async () => {
+  const fetchFn = async (url) =>
+    url.includes("/stop-eta/") ? { ok: true, json: async () => ({}) } : answer({ name_tc: "Open" });
+  const config = validateConfig({ stops: [{ operator: "kmb", stop_id: "OK1" }] });
+  const { failures } = await fetchRows(config, { fetchFn, now: () => NOW });
+  assert.equal(failures.length, 1);
 });

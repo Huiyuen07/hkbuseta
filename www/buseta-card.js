@@ -279,11 +279,18 @@ const chartHtml = (groups, config, gap) =>
 const clock = (date) =>
   date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 
-function footHtml({ leave_minutes: leave }, updated, failed) {
+function failureHtml({ failures, allFailed }) {
+  if (failures.length === 0) return "";
+  if (allFailed) return "更新失敗";
+  const names = new Set(failures.map(({ stop }) => stop || "部分站點"));
+  return `${escapeHtml([...names].join("、"))} 更新失敗`;
+}
+
+function footHtml({ leave_minutes: leave }, updated, problem) {
   const area = leave ? `<span class="key"><span class="chip area"></span>${leave} 分鐘內未必趕到</span>` : "";
   const status = [
     ...(updated ? [`更新於 ${clock(updated)}`] : []),
-    ...(failed ? ["更新失敗"] : []),
+    ...(problem ? [problem] : []),
   ].join("，");
   return `${area}<span class="key"><span class="chip scheduled"></span>原定班次</span>
     <span class="updated">${status}</span>`;
@@ -297,6 +304,7 @@ class BusetaCard extends HTMLElement {
   #connected = false;
   #updated;
   #running;
+  #memory = new Map();
   #onVisibility = () => {
     if (this.#config.stops.length === 0) return;
     if (document.hidden) this.#stop();
@@ -370,18 +378,19 @@ class BusetaCard extends HTMLElement {
     this.#timer = undefined;
   }
 
-  #show(rows) {
+  #show(result) {
     const config = this.#config;
-    const groups = groupRows(rows, config);
+    const groups = groupRows(result.rows, config);
     const gap = dotGap(this.#chart.clientWidth, config);
-    this.#chart.innerHTML = groups.length ? chartHtml(groups, config, gap) : NO_BUSES;
-    this.#updated = new Date();
-    this.#foot.innerHTML = footHtml(config, this.#updated, false);
+    const empty = result.allFailed ? FAILED : NO_BUSES;
+    this.#chart.innerHTML = groups.length ? chartHtml(groups, config, gap) : empty;
+    if (!result.allFailed) this.#updated = new Date();
+    this.#foot.innerHTML = footHtml(config, this.#updated, failureHtml(result));
   }
 
   #showFailure() {
     if (!this.#updated) this.#chart.innerHTML = FAILED;
-    this.#foot.innerHTML = footHtml(this.#config, this.#updated, true);
+    this.#foot.innerHTML = footHtml(this.#config, this.#updated, "更新失敗");
   }
 
   async #refresh() {
@@ -389,8 +398,9 @@ class BusetaCard extends HTMLElement {
     if (this.#running === config) return;
     this.#running = config;
     try {
-      const rows = await fetchRows(config);
-      if (config === this.#config) this.#show(rows);
+      const result = await fetchRows(config, { memory: this.#memory });
+      for (const { error } of result.failures) console.error("無法獲取巴士數據：", error);
+      if (config === this.#config) this.#show(result);
     } catch (error) {
       console.error("無法獲取巴士數據：", error);
       if (config === this.#config) this.#showFailure();

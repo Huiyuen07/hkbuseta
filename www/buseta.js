@@ -20,6 +20,9 @@ const REQUEST_TIMEOUT_MS = 15000;
 const NAME_WAIT_MS = 2000;
 const MAX_REQUESTS = 6;
 
+export const MIN_REFRESH_SECONDS = 10;
+const MINIMUMS = { refresh_seconds: MIN_REFRESH_SECONDS, max_minutes: 1, leave_minutes: 0 };
+
 export const DEFAULTS = {
   refresh_seconds: 30,
   max_minutes: 30,
@@ -64,8 +67,10 @@ export function validateConfig(config) {
   if (!Object.hasOwn(COLOR_SCHEMES, merged.color_scheme)) {
     throw new Error(`buseta: unsupported color_scheme "${merged.color_scheme}"`);
   }
-  if (!(merged.leave_minutes >= 0)) {
-    throw new Error("buseta: `leave_minutes` must be 0 or more");
+  for (const [key, minimum] of Object.entries(MINIMUMS)) {
+    if (!Number.isFinite(merged[key]) || merged[key] < minimum) {
+      throw new Error(`buseta: \`${key}\` must be a number of at least ${minimum}`);
+    }
   }
   return merged;
 }
@@ -281,7 +286,12 @@ export function stopUrls(stop) {
     : [...new Set(stop.routes.map(routeName))].map((route) => CTB_ETA(stop.stop_id, route));
 }
 
-export async function fetchRows(config, { fetchFn = fetch, now = () => new Date() } = {}) {
+// A failed request leaves the rest of the board alone. Its stop falls back on the records
+// it last gave, kept in `memory`, and toRow works out the minutes again from each ETA.
+export async function fetchRows(
+  config,
+  { fetchFn = fetch, now = () => new Date(), memory = new Map() } = {},
+) {
   const named = Promise.all(
     config.stops.map(async (stop) => ({
       ...stop,
@@ -291,10 +301,16 @@ export async function fetchRows(config, { fetchFn = fetch, now = () => new Date(
   const requests = config.stops.flatMap((stop, index) =>
     stopUrls(stop).map((url) => ({ index, url })),
   );
-  const results = await mapLimited(requests, async ({ index, url }) => ({
-    index,
-    records: await getData(fetchFn, url),
-  }));
+  const results = await mapLimited(requests, async ({ index, url }) => {
+    try {
+      const records = await getData(fetchFn, url);
+      if (!Array.isArray(records)) throw new Error(`${url}: no data`);
+      memory.set(url, records);
+      return { index, records };
+    } catch (error) {
+      return { index, records: memory.get(url) ?? [], error };
+    }
+  });
   const stops = await named;
   const current = now();
   const rows = results.flatMap(({ index, records }) =>
@@ -303,5 +319,12 @@ export async function fetchRows(config, { fetchFn = fetch, now = () => new Date(
       .map((raw) => toRow(raw, stops[index], current))
       .filter(Boolean),
   );
-  return selectRows(rows, config);
+  const failures = results
+    .filter(({ error }) => error)
+    .map(({ index, error }) => ({ stop: stops[index].name, error }));
+  return {
+    rows: selectRows(rows, config),
+    failures,
+    allFailed: requests.length > 0 && failures.length === requests.length,
+  };
 }
