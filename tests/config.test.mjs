@@ -209,6 +209,31 @@ test("Citybus stops are looked up in route order", async () => {
   ]);
 });
 
+test("a Citybus stop that fails is left out and the others still load", async () => {
+  const fetchFn = fakeFetch({ [`${CTB_API}/stop/S1`]: { name_tc: "First", lat: "1", long: "2" } });
+  const stops = await loadRouteStops("ctb", ["GONE", "S1"], { fetchFn });
+  assert.deepEqual(stops.map((stop) => stop.stop_id), ["S1"]);
+});
+
+test("Citybus stops fail as a whole only when none could be loaded", async () => {
+  await assert.rejects(loadRouteStops("ctb", ["GONE"], { fetchFn: fakeFetch({}) }), /HTTP 404/);
+});
+
+test("a long Citybus route does not request every stop at once", async () => {
+  let running = 0;
+  let peak = 0;
+  const fetchFn = async () => {
+    running += 1;
+    peak = Math.max(peak, running);
+    await new Promise((resolve) => setImmediate(resolve));
+    running -= 1;
+    return { ok: true, json: async () => ({ data: { name_tc: "X", lat: "1", long: "2" } }) };
+  };
+  const ids = Array.from({ length: 40 }, (_, index) => `S${index}`);
+  assert.equal((await loadRouteStops("ctb", ids, { fetchFn })).length, 40);
+  assert.ok(peak <= 6, `peak was ${peak}`);
+});
+
 test("KMB stops come from the full list, once, in route order", async () => {
   const { loadRouteStops: load } = await freshConfig();
   let calls = 0;
@@ -260,6 +285,13 @@ test("live records become one option per route and destination, sorted by route"
     { route: "68K", dir: "O", destination: "Z" },
     { route: "238", dir: "O", destination: "X" },
     { route: "238", dir: "O", destination: "Y" },
+  ]);
+});
+
+test("an option remembers the KMB service_type it came from", () => {
+  const records = [{ route: "238", dir: "O", service_type: 2, dest_tc: "X", eta: "t1" }];
+  assert.deepEqual(stopOptions(KMB, records), [
+    { route: "238", dir: "O", destination: "X", service_type: 2 },
   ]);
 });
 
@@ -321,6 +353,15 @@ test("a hand-written rule also shows as hidden, and can be turned off", () => {
   const option = { route: "1", dir: "O", destination: "X" };
   assert.equal(isHidden(option, CTB, [rule]), true);
   assert.deepEqual(setHidden({ stops: [CTB], exclude: [rule] }, CTB, option, false).exclude, []);
+});
+
+test("a hand-written service_type rule shows only that variant as hidden", () => {
+  const rule = { route: "238", service_type: 2 };
+  const hidden = { route: "238", dir: "O", destination: "Y", service_type: 2 };
+  const shown = { route: "238", dir: "O", destination: "X", service_type: 1 };
+  assert.equal(isHidden(hidden, KMB, [rule]), true);
+  assert.equal(isHidden(shown, KMB, [rule]), false);
+  assert.deepEqual(setHidden({ stops: [KMB], exclude: [rule] }, KMB, hidden, false).exclude, []);
 });
 
 test("addStop adds a KMB stop", () => {

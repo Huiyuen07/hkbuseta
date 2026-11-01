@@ -27,7 +27,17 @@ globalThis.customElements = {
   get: (name) => defined.get(name),
 };
 globalThis.window = globalThis;
-globalThis.document = { createElement: (name) => new (defined.get(name))() };
+const pageListeners = new Set();
+globalThis.document = {
+  createElement: (name) => new (defined.get(name))(),
+  hidden: false,
+  addEventListener: (_type, listener) => pageListeners.add(listener),
+  removeEventListener: (_type, listener) => pageListeners.delete(listener),
+};
+function setPageHidden(hidden) {
+  document.hidden = hidden;
+  for (const listener of pageListeners) listener();
+}
 
 await import("../www/buseta-card.js");
 const BusetaCard = defined.get("buseta-card");
@@ -69,6 +79,8 @@ function change(editor, action, value) {
 
 beforeEach(() => {
   mock.timers.enable({ apis: ["setInterval"] });
+  pageListeners.clear();
+  document.hidden = false;
   respondWith([]);
 });
 afterEach(() => mock.timers.reset());
@@ -330,4 +342,180 @@ test("a failed refresh keeps the rows already on screen", async () => {
   assert.equal(logged.mock.callCount(), 1);
   logged.mock.restore();
   card.disconnectedCallback();
+});
+
+test("a card stops polling while the page is hidden", async () => {
+  respondWith([k1(9)]);
+  const card = await showCard({ refresh_seconds: 10 });
+  const before = requests;
+  setPageHidden(true);
+  mock.timers.tick(60000);
+  await settle();
+  assert.equal(requests, before);
+  card.disconnectedCallback();
+});
+
+test("a card updates at once when the page comes back, then keeps polling", async () => {
+  respondWith([k1(9)]);
+  const card = await showCard({ refresh_seconds: 10 });
+  setPageHidden(true);
+  const before = requests;
+  setPageHidden(false);
+  await settle();
+  assert.equal(requests, before + 1);
+  mock.timers.tick(10000);
+  await settle();
+  assert.equal(requests, before + 2);
+  card.disconnectedCallback();
+});
+
+test("buses stay on screen until the update after the page comes back", async () => {
+  respondWith([k1(9)]);
+  const card = await showCard();
+  setPageHidden(true);
+  globalThis.fetch = () => new Promise(() => {});
+  setPageHidden(false);
+  assert.match(body(card), /Kowloon/);
+  card.disconnectedCallback();
+});
+
+test("a card opened on a hidden page waits until the page is shown", async () => {
+  respondWith([k1(9)]);
+  document.hidden = true;
+  const card = await showCard();
+  assert.equal(requests, 0);
+  setPageHidden(false);
+  await settle();
+  assert.equal(requests, 1);
+  assert.match(body(card), /Kowloon/);
+  card.disconnectedCallback();
+});
+
+test("a removed card ignores the page coming back", async () => {
+  respondWith([k1(9)]);
+  const card = await showCard({ refresh_seconds: 10 });
+  card.disconnectedCallback();
+  setPageHidden(true);
+  const before = requests;
+  setPageHidden(false);
+  mock.timers.tick(10000);
+  await settle();
+  assert.equal(requests, before);
+});
+
+test("a card with no stops keeps asking for some when the page comes back", async () => {
+  const card = await showCard({ stops: [] });
+  setPageHidden(true);
+  setPageHidden(false);
+  await settle();
+  assert.match(body(card), /加入站點/);
+  card.disconnectedCallback();
+});
+
+test("a new update waits for one that is still running", async () => {
+  const card = await showCard({ refresh_seconds: 10 });
+  let answer;
+  let started = 0;
+  globalThis.fetch = () => {
+    started += 1;
+    return new Promise((resolve) => (answer = () => resolve({ ok: true, json: async () => ({ data: [] }) })));
+  };
+  mock.timers.tick(10000);
+  await settle();
+  mock.timers.tick(30000);
+  await settle();
+  assert.equal(started, 1);
+  answer();
+  await settle();
+  mock.timers.tick(10000);
+  await settle();
+  assert.equal(started, 2);
+  card.disconnectedCallback();
+});
+
+test("a new config updates at once even while the old one is still running", async () => {
+  const card = await showCard();
+  let started = 0;
+  globalThis.fetch = () => {
+    started += 1;
+    return new Promise(() => {});
+  };
+  mock.timers.tick(30000);
+  await settle();
+  card.setConfig({ stops: [STOP], max_minutes: 20 });
+  await settle();
+  assert.equal(started, 2);
+  card.disconnectedCallback();
+});
+
+test("a remark appears under its lane, escaped", async () => {
+  respondWith([k1(9, { rmk_tc: "<b>只限星期一</b>" })]);
+  const card = await showCard();
+  assert.match(body(card), /class="note"[^>]*>&lt;b&gt;只限星期一&lt;\/b&gt;</);
+  card.disconnectedCallback();
+});
+
+test("a scheduled departure adds no remark line", async () => {
+  respondWith([k1(9, { rmk_tc: "原定班次" })]);
+  const card = await showCard();
+  assert.doesNotMatch(body(card), /class="note"/);
+  card.disconnectedCallback();
+});
+
+async function showCardAtWidth(width, records) {
+  respondWith(records);
+  const card = new BusetaCard();
+  card.setConfig({ stops: [STOP], max_minutes: 30, leave_minutes: 0 });
+  card.shadowRoot.querySelector(".chart").clientWidth = width;
+  card.connectedCallback();
+  await settle();
+  return card;
+}
+
+test("dots that would touch on a phone-sized card are moved off the rail", async () => {
+  const card = await showCardAtWidth(360, [k1(5), k1(7)]);
+  assert.match(body(card), /class="dot kmb next up"/);
+  assert.match(body(card), /class="dot kmb later down"/);
+  card.disconnectedCallback();
+});
+
+test("the narrow card's shorter labels count towards how far apart dots are", async () => {
+  const card = await showCardAtWidth(360, [k1(5), k1(8)]);
+  assert.match(body(card), /class="dot kmb next up"/);
+  card.disconnectedCallback();
+});
+
+test("the same dots stay on the rail on a wide card", async () => {
+  const card = await showCardAtWidth(1200, [k1(5), k1(7)]);
+  assert.doesNotMatch(body(card), /\b(up|down)\b/);
+  card.disconnectedCallback();
+});
+
+test("a card that has no width yet leaves dots on the rail", async () => {
+  const card = await showCardAtWidth(0, [k1(5), k1(7)]);
+  assert.doesNotMatch(body(card), /\b(up|down)\b/);
+  card.disconnectedCallback();
+});
+
+test("the editor says when some Citybus stops could not be loaded", async () => {
+  const data = (value) => ({ ok: true, json: async () => ({ data: value }) });
+  globalThis.fetch = async (url) => {
+    if (url.endsWith("/route/ctb/1")) return data({ route: "1", orig_tc: "A", dest_tc: "B" });
+    if (url.endsWith("/route-stop/ctb/1/outbound")) return data([{ stop: "S1", seq: 1 }, { stop: "S2", seq: 2 }]);
+    if (url.endsWith("/route-stop/ctb/1/inbound")) return data([]);
+    if (url.endsWith("/stop/S1")) return data({ name_tc: "First", lat: "1", long: "2" });
+    return { ok: false, status: 500 };
+  };
+  const editor = await editorWith();
+  const { listeners } = editor.shadowRoot;
+  editor.connectedCallback();
+  listeners.change({ target: { dataset: { action: "operator" }, value: "ctb" } });
+  listeners.input({ target: { dataset: { action: "route" }, value: "1" } });
+  listeners.submit({ preventDefault() {} });
+  await settle();
+  await settle();
+  await settle();
+  const add = editor.shadowRoot.querySelector("#add").innerHTML;
+  assert.match(add, /First/);
+  assert.match(add, /1 個站牌/);
 });

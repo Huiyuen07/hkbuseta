@@ -12,6 +12,14 @@ const STOP_URLS = {
   ctb: (stopId) => `${CTB_API}/stop/${stopId}`,
 };
 
+const SCHEDULED = "原定班次";
+
+// Long enough for KMB's full stop list, which the editor downloads.
+const REQUEST_TIMEOUT_MS = 15000;
+// Arrivals stop waiting for a stop name after this long. The name shows on a later update.
+const NAME_WAIT_MS = 2000;
+const MAX_REQUESTS = 6;
+
 export const DEFAULTS = {
   refresh_seconds: 30,
   max_minutes: 30,
@@ -67,6 +75,7 @@ export function toRow(raw, stop, now) {
   if (!raw.eta) return null;
   const etaMs = new Date(raw.eta).getTime();
   if (etaMs <= now.getTime()) return null;
+  const remark = raw.rmk_tc ?? "";
   return {
     operator: stop.operator,
     stopId: stop.stop_id,
@@ -77,7 +86,8 @@ export function toRow(raw, stop, now) {
     serviceType: raw.service_type,
     eta: raw.eta,
     remainingMinutes: Math.ceil((etaMs - now.getTime()) / 60000),
-    scheduled: raw.rmk_tc === "原定班次",
+    scheduled: remark === SCHEDULED,
+    remark,
   };
 }
 
@@ -105,6 +115,7 @@ export function matchesRule(row, rule) {
     same(rule.stop_id, row.stopId) &&
     same(rule.route, row.route) &&
     same(rule.dir, row.dir) &&
+    same(rule.service_type, row.serviceType) &&
     same(rule.destination, row.destination)
   );
 }
@@ -139,14 +150,23 @@ function compareLanes(a, b) {
   return compareRoutes(a.route, b.route) || a.destination.localeCompare(b.destination);
 }
 
-function addDeparture(lane, row, leaveMinutes) {
-  const passed = lane.departures.some(({ status }) => status === "next");
-  const status = row.remainingMinutes <= leaveMinutes ? "miss" : passed ? "later" : "next";
-  lane.departures.push({ minutes: row.remainingMinutes, scheduled: row.scheduled, status });
+function laneDepartures(rows, leaveMinutes) {
+  let passed = false;
+  return [...rows]
+    .sort((a, b) => a.remainingMinutes - b.remainingMinutes)
+    .map(({ remainingMinutes: minutes, scheduled }) => {
+      const status = minutes <= leaveMinutes ? "miss" : passed ? "later" : "next";
+      passed ||= status === "next";
+      return { minutes, scheduled, status };
+    });
 }
 
-// Expects rows soonest first, as selectRows gives them. The order of stops and lanes
-// ignores arrival time, so nothing on a wall panel moves about between refreshes.
+const laneNotes = (rows) => [
+  ...new Set(rows.map(({ remark }) => remark).filter((remark) => remark && remark !== SCHEDULED)),
+];
+
+// The order of stops and lanes ignores arrival time, so nothing on a wall panel moves
+// about between refreshes.
 export function groupRows(rows, { stops, leave_minutes: leaveMinutes }) {
   const configOrder = (row) =>
     stops.findIndex((stop) => stop.operator === row.operator && stop.stop_id === row.stopId);
@@ -158,14 +178,35 @@ export function groupRows(rows, { stops, leave_minutes: leaveMinutes }) {
     const laneKey = [row.operator, row.route, row.destination].join("|");
     if (!lanes.has(laneKey)) {
       const { operator, route, destination } = row;
-      lanes.set(laneKey, { operator, route, destination, departures: [] });
+      lanes.set(laneKey, { operator, route, destination, rows: [] });
     }
-    addDeparture(lanes.get(laneKey), row, leaveMinutes);
+    lanes.get(laneKey).rows.push(row);
   }
   return [...groups.values()].map(({ name, lanes }) => ({
     name,
-    lanes: [...lanes.values()].sort(compareLanes),
+    lanes: [...lanes.values()]
+      .map(({ rows: laneRows, ...lane }) => ({
+        ...lane,
+        departures: laneDepartures(laneRows, leaveMinutes),
+        notes: laneNotes(laneRows),
+      }))
+      .sort(compareLanes),
   }));
+}
+
+// Departures closer than `gap` minutes would cover each other's numbers, so each run of
+// them alternates above and below the rail.
+export function staggerDepartures(departures, gap) {
+  const near = (a, b) => b && Math.abs(a.minutes - b.minutes) < gap;
+  let row = "up";
+  return departures.map((departure, index) => {
+    const joinsLast = near(departure, departures[index - 1]);
+    if (!joinsLast) row = "up";
+    if (!joinsLast && !near(departure, departures[index + 1])) return departure;
+    const placed = { ...departure, row };
+    row = row === "up" ? "down" : "up";
+    return placed;
+  });
 }
 
 const AXIS_STEPS = [5, 10, 15, 20, 30, 60];
@@ -178,9 +219,32 @@ export function axisTicks(maxMinutes) {
 }
 
 export async function getData(fetchFn, url) {
-  const response = await fetchFn(url);
+  const response = await fetchFn(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
   if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
   return (await response.json()).data;
+}
+
+// Gives the results in the order of `items`, running at most `limit` workers at once.
+export async function mapLimited(items, worker, limit = MAX_REQUESTS) {
+  const results = [];
+  let next = 0;
+  const run = async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await worker(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
+  return results;
+}
+
+function withinTime(promise, milliseconds, fallback) {
+  let timer;
+  const expired = new Promise((resolve) => {
+    timer = setTimeout(resolve, milliseconds, fallback);
+  });
+  return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
 }
 
 // KMB ends most stop names with its own stop code, such as 「(WT916)」.
@@ -218,16 +282,25 @@ export function stopUrls(stop) {
 }
 
 export async function fetchRows(config, { fetchFn = fetch, now = () => new Date() } = {}) {
-  const stops = await withNames(config.stops, fetchFn);
-  const requests = stops.flatMap((stop) =>
-    stopUrls(stop).map(async (url) => ({ stop, records: await getData(fetchFn, url) })),
+  const named = Promise.all(
+    config.stops.map(async (stop) => ({
+      ...stop,
+      name: await withinTime(loadStopName(stop, fetchFn), NAME_WAIT_MS, ""),
+    })),
   );
-  const results = await Promise.all(requests);
+  const requests = config.stops.flatMap((stop, index) =>
+    stopUrls(stop).map((url) => ({ index, url })),
+  );
+  const results = await mapLimited(requests, async ({ index, url }) => ({
+    index,
+    records: await getData(fetchFn, url),
+  }));
+  const stops = await named;
   const current = now();
-  const rows = results.flatMap(({ stop, records }) =>
+  const rows = results.flatMap(({ index, records }) =>
     records
-      .filter((raw) => servesStop(raw, stop))
-      .map((raw) => toRow(raw, stop, current))
+      .filter((raw) => servesStop(raw, stops[index]))
+      .map((raw) => toRow(raw, stops[index], current))
       .filter(Boolean),
   );
   return selectRows(rows, config);

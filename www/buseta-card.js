@@ -2,9 +2,16 @@
 
 // Passing on the resource's ?v= keeps the other modules in step with the card.
 const version = new URL(import.meta.url).search;
-const { axisTicks, escapeHtml, fetchRows, groupRows, validateConfig } = await import(
-  `./buseta.js${version}`
-);
+const { axisTicks, escapeHtml, fetchRows, groupRows, staggerDepartures, validateConfig } =
+  await import(`./buseta.js${version}`);
+
+// These sizes also decide when dots need moving off the rail, so the styles use them too.
+const LABEL_WIDTH = 130;
+const NARROW_LABEL_WIDTH = 66;
+const NARROW_CARD = 440;
+const PAD_LEFT = 16;
+const PAD_RIGHT = 22;
+const DOT_SPACING = 28;
 
 // Every colour comes from these tokens. `auto` and `mono` use the HA theme, so they
 // follow light and dark mode; the others draw their own background in both.
@@ -24,10 +31,11 @@ const OPERATOR_COLOURS = `
 
 const STYLE = `
   ha-card {
-    --label: 130px;
+    --label: ${LABEL_WIDTH}px;
     --lane: 32px;
-    --pad-left: 16px;
-    --pad-right: 22px;
+    --shift: 8px;
+    --pad-left: ${PAD_LEFT}px;
+    --pad-right: ${PAD_RIGHT}px;
     container-type: inline-size;
     display: flex;
     flex-direction: column;
@@ -147,8 +155,23 @@ const STYLE = `
     width: 24px;
   }
   .dot.next { font-size: 16px; height: 30px; width: 30px; }
-  .dot.scheduled { background: var(--bg); border: 2px dashed var(--ink); color: var(--ink); }
+  .dot.up, .dot.down { font-size: 12px; height: 20px; width: 20px; }
+  .dot.next.up, .dot.next.down { font-size: 13px; height: 24px; width: 24px; }
+  .dot.up { top: calc(50% - var(--shift)); }
+  .dot.down { top: calc(50% + var(--shift)); }
   .dot.miss { background: var(--bg); border: 2px solid var(--soft); color: var(--soft); }
+  .dot.scheduled { background: var(--bg); border: 2px dashed var(--ink); color: var(--ink); }
+  .dot.miss.scheduled { border-color: var(--soft); color: var(--soft); }
+  .note {
+    background: var(--bg);
+    color: var(--soft);
+    font-size: 11px;
+    line-height: 14px;
+    margin-left: var(--label);
+    padding-bottom: 4px;
+    position: relative;
+    width: fit-content;
+  }
   .foot {
     align-items: center;
     border-top: 1px solid var(--rail);
@@ -168,8 +191,8 @@ const STYLE = `
   }
   .chip.scheduled { border: 2px dashed var(--soft); }
   .updated { margin-left: auto; }
-  @container (max-width: 440px) {
-    .chart { --label: 66px; --lane: 44px; }
+  @container (max-width: ${NARROW_CARD}px) {
+    .chart { --label: ${NARROW_LABEL_WIDTH}px; --lane: 44px; --shift: 11px; }
     .who { align-items: flex-start; flex-direction: column; gap: 2px; }
     .destination { font-size: 11px; line-height: 13px; max-width: 62px; }
   }
@@ -184,12 +207,25 @@ const NO_BUSES = messageHtml("暫無班次");
 const share = (minutes, config) => (Math.min(minutes, config.max_minutes) / config.max_minutes) * 100;
 
 // Earlier buses stack on top, because they are the ones that matter when two touch.
-const dotHtml = ({ minutes, scheduled, status }, index, operator, config) => {
-  const classes = ["dot", operator, status, ...(scheduled ? ["scheduled"] : [])].join(" ");
+const dotHtml = ({ minutes, scheduled, status, row }, index, operator, config) => {
+  const classes = [
+    "dot",
+    operator,
+    status,
+    ...(scheduled ? ["scheduled"] : []),
+    ...(row ? [row] : []),
+  ].join(" ");
   return `<span class="${classes}" style="left:${share(minutes, config)}%;z-index:${20 - index}">${minutes}</span>`;
 };
 
-const laneHtml = ({ operator, route, destination, departures }, config) => `
+// The minutes one dot spans on this card. Zero while the card has no width yet.
+function dotGap(cardWidth, { max_minutes: max }) {
+  const label = cardWidth <= NARROW_CARD ? NARROW_LABEL_WIDTH : LABEL_WIDTH;
+  const track = cardWidth - PAD_LEFT - PAD_RIGHT - label;
+  return track > 0 ? (DOT_SPACING / track) * max : 0;
+}
+
+const laneHtml = ({ operator, route, destination, departures, notes }, config, gap) => `
   <div class="lane">
     <div class="who">
       <span class="plate ${operator}">${escapeHtml(route)}</span>
@@ -197,14 +233,17 @@ const laneHtml = ({ operator, route, destination, departures }, config) => `
     </div>
     <div class="track">
       <span class="rail"></span>
-      ${departures.map((item, index) => dotHtml(item, index, operator, config)).join("")}
+      ${staggerDepartures(departures, gap)
+        .map((item, index) => dotHtml(item, index, operator, config))
+        .join("")}
     </div>
-  </div>`;
+  </div>
+  ${notes.map((note) => `<div class="note">${escapeHtml(note)}</div>`).join("")}`;
 
-const groupHtml = ({ name, lanes }, config) => `
+const groupHtml = ({ name, lanes }, config, gap) => `
   <section>
     <h3 class="stop">${escapeHtml(name)}</h3>
-    ${lanes.map((lane) => laneHtml(lane, config)).join("")}
+    ${lanes.map((lane) => laneHtml(lane, config, gap)).join("")}
   </section>`;
 
 // The width is the track's share of the chart once the padding and label column are gone.
@@ -234,8 +273,8 @@ function axisHtml(config) {
     </div>`;
 }
 
-const chartHtml = (groups, config) =>
-  bandHtml(config) + axisHtml(config) + groups.map((group) => groupHtml(group, config)).join("");
+const chartHtml = (groups, config, gap) =>
+  bandHtml(config) + axisHtml(config) + groups.map((group) => groupHtml(group, config, gap)).join("");
 
 const clock = (date) =>
   date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
@@ -257,6 +296,12 @@ class BusetaCard extends HTMLElement {
   #timer;
   #connected = false;
   #updated;
+  #running;
+  #onVisibility = () => {
+    if (this.#config.stops.length === 0) return;
+    if (document.hidden) this.#stop();
+    else this.#poll();
+  };
 
   static getStubConfig() {
     return { stops: [] };
@@ -285,11 +330,13 @@ class BusetaCard extends HTMLElement {
 
   connectedCallback() {
     this.#connected = true;
+    document.addEventListener("visibilitychange", this.#onVisibility);
     this.#start();
   }
 
   disconnectedCallback() {
     this.#connected = false;
+    document.removeEventListener("visibilitychange", this.#onVisibility);
     this.#stop();
   }
 
@@ -308,6 +355,12 @@ class BusetaCard extends HTMLElement {
       return;
     }
     this.#chart.innerHTML = LOADING;
+    this.#poll();
+  }
+
+  #poll() {
+    this.#stop();
+    if (document.hidden) return;
     this.#refresh();
     this.#timer = setInterval(() => this.#refresh(), this.#config.refresh_seconds * 1000);
   }
@@ -320,7 +373,8 @@ class BusetaCard extends HTMLElement {
   #show(rows) {
     const config = this.#config;
     const groups = groupRows(rows, config);
-    this.#chart.innerHTML = groups.length ? chartHtml(groups, config) : NO_BUSES;
+    const gap = dotGap(this.#chart.clientWidth, config);
+    this.#chart.innerHTML = groups.length ? chartHtml(groups, config, gap) : NO_BUSES;
     this.#updated = new Date();
     this.#foot.innerHTML = footHtml(config, this.#updated, false);
   }
@@ -332,12 +386,16 @@ class BusetaCard extends HTMLElement {
 
   async #refresh() {
     const config = this.#config;
+    if (this.#running === config) return;
+    this.#running = config;
     try {
       const rows = await fetchRows(config);
       if (config === this.#config) this.#show(rows);
     } catch (error) {
       console.error("無法獲取巴士數據：", error);
       if (config === this.#config) this.#showFailure();
+    } finally {
+      if (this.#running === config) this.#running = undefined;
     }
   }
 }

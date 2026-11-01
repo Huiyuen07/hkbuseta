@@ -306,7 +306,7 @@ class BusetaCardEditor extends HTMLElement {
   }
 
   #stopsHtml() {
-    const { route, direction, stops } = this.#search;
+    const { route, direction, stops, missing } = this.#search;
     if (!stops) return "";
     const nearest = nearestStop(stops, this.#home);
     const nearestHtml = nearest
@@ -314,8 +314,11 @@ class BusetaCardEditor extends HTMLElement {
       : "";
     const items = stops.map((stop) => `<li>${this.#stopButton(stop, "加入")}</li>`);
     const { label } = route.directions[direction];
+    const missingHtml = missing
+      ? `<div class="error">有 ${missing} 個站牌未能載入，清單可能不完整，請稍後再查詢一次。</div>`
+      : "";
     return `<div class="hint">按站牌加入路線 ${escapeHtml(route.route)} ${escapeHtml(label)}。</div>
-      ${nearestHtml}<ul>${items.join("")}</ul>`;
+      ${missingHtml}${nearestHtml}<ul>${items.join("")}</ul>`;
   }
 
   #searchFailed(message) {
@@ -352,9 +355,11 @@ class BusetaCardEditor extends HTMLElement {
     this.#renderAdd();
     const current = () => this.#search.route === route && this.#search.direction === direction;
     try {
-      const stops = await loadRouteStops(operator, route.directions[direction].stopIds);
+      const { stopIds } = route.directions[direction];
+      const stops = await loadRouteStops(operator, stopIds);
       if (!current()) return;
-      this.#search = { ...this.#search, stops, loading: false };
+      const missing = stopIds.length - stops.length;
+      this.#search = { ...this.#search, stops, missing, loading: false };
       this.#renderAdd();
     } catch (error) {
       if (!current()) return;

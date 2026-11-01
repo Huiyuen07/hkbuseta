@@ -9,6 +9,7 @@ const {
   compareRoutes,
   displayName,
   getData,
+  mapLimited,
   matchesRule,
   routeName,
   servesStop,
@@ -140,9 +141,16 @@ export async function loadRouteStops(operator, stopIds, { fetchFn = fetch } = {}
     const stops = new Map((await loadKmbStops(fetchFn)).map((stop) => [stop.stop, stop]));
     return stopIds.filter((id) => stops.has(id)).map((id) => stopChoice(id, stops.get(id)));
   }
-  return Promise.all(
-    stopIds.map(async (id) => stopChoice(id, await getData(fetchFn, `${CTB_API}/stop/${id}`))),
+  // Each Citybus stop is its own request, so one failure only leaves that stop out.
+  const failures = [];
+  const stops = await mapLimited(stopIds, (id) =>
+    getData(fetchFn, `${CTB_API}/stop/${id}`)
+      .then((stop) => stopChoice(id, stop))
+      .catch((error) => void failures.push(error)),
   );
+  const found = stops.filter(Boolean);
+  if (found.length === 0 && failures.length > 0) throw failures[0];
+  return found;
 }
 
 export function routeEntry(route, { label, dir, variants }, stopId) {
@@ -186,16 +194,18 @@ export function addedRoutes(stops) {
 // this stop stay listed, so they can be turned off while the API has no data for them.
 export function stopOptions(stop, records, exclude = []) {
   const options = new Map();
-  const add = (route, dir, destination) => {
+  const add = (route, dir, destination, serviceType) => {
     const key = `${route}|${destination}`;
-    if (!options.has(key)) options.set(key, { route, dir, destination });
+    if (options.has(key)) return;
+    const variant = serviceType === undefined ? {} : { service_type: serviceType };
+    options.set(key, { route, dir, destination, ...variant });
   };
-  for (const { route, dir, dest_tc: destination } of records) {
-    if (destination) add(route, dir, destination);
+  for (const { route, dir, dest_tc: destination, service_type: serviceType } of records) {
+    if (destination) add(route, dir, destination, serviceType);
   }
   for (const rule of exclude) {
     const listed = rule.stop_id === stop.stop_id && rule.route !== undefined && rule.destination;
-    if (listed) add(String(rule.route), rule.dir, rule.destination);
+    if (listed) add(String(rule.route), rule.dir, rule.destination, rule.service_type);
   }
   return [...options.values()].sort(
     (a, b) =>
@@ -213,6 +223,7 @@ const optionRow = (option, stop) => ({
   stopId: stop.stop_id,
   route: option.route,
   dir: option.dir,
+  serviceType: option.service_type,
   destination: option.destination,
 });
 

@@ -38,8 +38,11 @@ Home Assistant 的 Lovelace 卡片，以時間軸顯示香港巴士預計到站�
 
 - 同一站的路線放在一起，每條路線加目的地佔一條軌道，按路線號排列，不會因班次而改變位置。
 - 該段時間內沒有班次的路線不會顯示。
-- 實心圓點是實時班次，虛線圓點是營運商標明的「原定班次」，空心圓點在出門時間內。
-- 底部顯示最後更新時間；更新失敗時會顯示「更新失敗」，並保留上次的班次。
+- 實心圓點是實時班次，虛線圓點是營運商標明的「原定班次」，空心圓點在出門時間內。出門時間內的原定班次是灰色虛線。
+- 圓點太近時會縮小，並在軌道上下錯開。卡片改變寬度後，下次更新才會重新排列。
+- 營運商的其他備註顯示在該條軌道下方。
+- 底部顯示最後更新時間。更新失敗或 15 秒內沒有回應時，會顯示「更新失敗」，並保留上次的班次。
+- 頁面隱藏時暫停更新，回到頁面時立即更新。
 
 更新版本後，把資源網址的 `?v=` 改為 `deploy.sh` 印出的新值，瀏覽器才會載入新版。
 
@@ -48,6 +51,7 @@ Home Assistant 的 Lovelace 卡片，以時間軸顯示香港巴士預計到站�
 - 第一次查詢九巴路線時會下載路線清單（約 350 KB），選方向後再下載全站清單（約 1.2 MB），每次開啟編輯視窗最多各一次。九巴的服務曾在短時間多次下載後拒絕全站清單（HTTP 403），這時無法選站牌，請稍後重試或改用 YAML。到站顯示不受影響。
 - 不能按站名搜尋，要先輸入路線號。
 - 「選擇顯示的班次」的選項來自該站的即時資料。收車後或暫停服務的路線可能不會列出；已隱藏的班次則一定會列出。
+- 城巴部分站牌載入失敗時，清單仍會列出其餘站牌並提示，稍後再查詢一次即可補回。
 - 介面暫時只有繁體中文。
 - 卡片寬度和高度只在「區段」版面生效，舊式版面由 HA 決定大小。
 
@@ -81,9 +85,11 @@ Home Assistant 的 Lovelace 卡片，以時間軸顯示香港巴士預計到站�
 | `service_type` | 九巴專用：同一方向有多個目的地時，指定其中一個 |
 | `label` | 編輯器顯示的方向文字，不影響卡片顯示的班次 |
 
-站名一律即時取自營運商，不存於設定，九巴站名後的站牌代碼（例如 `(WT916)`）不會顯示。每個站只查一次；查詢失敗時站名暫時留空，到站時間不受影響，下次更新再試。
+站名一律即時取自營運商，不存於設定，九巴站名後的站牌代碼（例如 `(WT916)`）不會顯示。每個站只查一次。查詢失敗或兩秒內沒有回應時，站名暫時留空，到站時間照常顯示，之後的更新會補上。
 
-`exclude` 每項可使用 `operator`、`stop_id`、`route`、`dir`（`I`／`O`）、`destination`。一條規則內的欄位要全部相符才會隱藏該班次。
+`exclude` 每項可使用 `operator`、`stop_id`、`route`、`dir`（`I`／`O`）、`service_type`（九巴專用）、`destination`。一條規則內的欄位要全部相符才會隱藏該班次。
+
+圖形介面隱藏班次時，規則靠目的地文字比對，營運商改字後要重新隱藏。手寫規則可以改用 `service_type`，不受改字影響。
 
 ### 重複班次
 
@@ -152,8 +158,11 @@ Data comes from the government's open data APIs and is read directly by the brow
 
 - Routes at the same stop are grouped. Each route and destination has its own track, ordered by route number, so tracks don't move as buses come and go.
 - Routes with no bus in the time shown don't appear.
-- A solid dot is a live departure, a dashed dot is one the operator marks as scheduled (「原定班次」), and a hollow dot is inside your leaving time.
-- The footer shows the last update time. If an update fails, it shows 「更新失敗」 and keeps the last buses on screen.
+- A solid dot is a live departure, a dashed dot is one the operator marks as scheduled (「原定班次」), and a hollow dot is inside your leaving time. A scheduled departure inside your leaving time is gray and dashed.
+- Dots that are too close shrink and move above and below the track. After the card changes width, they rearrange at the next update.
+- Other operator remarks appear under the track.
+- The footer shows the last update time. If an update fails or gets no response within 15 seconds, it shows 「更新失敗」 (update failed) and keeps the last buses on screen.
+- Updates pause while the page is hidden and run at once when you return.
 
 After an update, change the `?v=` in the resource URL to the new value printed by `deploy.sh`, so browsers load the new version.
 
@@ -162,6 +171,7 @@ After an update, change the `?v=` in the resource URL to the new value printed b
 - The first KMB route lookup downloads the route list (about 350 KB). Choosing a direction then downloads the full stop list (about 1.2 MB). Each is downloaded at most once per edit dialog. KMB has refused the stop list (HTTP 403) after many downloads in a short time. You then can't choose a stop, so try again later or use YAML. Arrival times are not affected.
 - You can't search by stop name, so enter a route number first.
 - The options under 「選擇顯示的班次」 come from the stop's live data. Routes that have finished for the day or are suspended may be missing. Buses you have hidden are always listed.
+- If some Citybus stops fail to load, the list shows the rest with a notice. Search again later to get the missing ones.
 - The editor is in Traditional Chinese only for now.
 - Card width and height only apply in the Sections layout. In older layouts, HA decides the size.
 
@@ -195,9 +205,11 @@ Each entry in `routes` is a route number or an object:
 | `service_type` | KMB only: picks one destination when a direction has several |
 | `label` | Direction text for the editor. It doesn't change which buses appear |
 
-Stop names always come live from the operator and aren't stored in the config. The stop code after a KMB name, such as `(WT916)`, isn't shown. Each stop is looked up once. If a lookup fails, the stop name stays blank until the next refresh, and arrival times are not affected.
+Stop names always come live from the operator and aren't stored in the config. The stop code after a KMB name, such as `(WT916)`, isn't shown. Each stop is looked up once. If a lookup fails or takes more than two seconds, the stop name stays blank, arrival times still appear, and a later update fills the name in.
 
-Each `exclude` entry can use `operator`, `stop_id`, `route`, `dir` (`I` or `O`) and `destination`. A bus is hidden only when every field in the rule matches.
+Each `exclude` entry can use `operator`, `stop_id`, `route`, `dir` (`I` or `O`), `service_type` (KMB only) and `destination`. A bus is hidden only when every field in the rule matches.
+
+Rules made in the editor match destination text, so if an operator rewords it, hide the bus again. Hand-written rules can use `service_type` instead, which isn't affected by rewording.
 
 ### Duplicate departures
 
