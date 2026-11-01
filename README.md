@@ -4,32 +4,46 @@
 
 ## 中文
 
-在 Home Assistant dashboard 上顯示香港巴士預計到站時間的看板，支援九巴（KMB）和城巴（Citybus）。
+Home Assistant 的 Lovelace 卡片，顯示香港巴士預計到站時間，支援九巴（KMB）和城巴（Citybus），並跟隨 HA 主題（包括深色模式）。
 
 資料來自政府開放數據 API，由瀏覽器直接讀取，不需要 API key、整合或背景服務。
 
 ### 安裝
 
-1. 複製範例設定，並填入你的站點：
-
-   ```bash
-   cp www/config.example.json www/config.json
-   ```
-
-2. 部署到 Home Assistant：
+1. 部署卡片：
 
    ```bash
    ./deploy.sh <ssh-host>
    ```
 
-   沒有 SSH 的話，把 `www/` 內的檔案複製到 `/config/www/buseta/` 即可。
+   指令最後會印出資源網址。沒有 SSH 的話，把 `www/` 內的四個 `.js` 檔複製到 `/config/www/buseta/`，資源網址就是 `/local/buseta/buseta-card.js`。
 
-3. 在 dashboard 加入 iframe 卡片，內容見 `examples/lovelace-card.yaml`。
+2. 加入資源：到「設定 → 儀表板 → 右上角選單 → 資源」新增上述網址，類型選「JavaScript 模組」。
 
-### 設定（`www/config.json`）
+3. 在 dashboard 新增卡片，搜尋「Bus ETA」。編輯視窗可以用圖形介面設定，不用查站點 ID：
+
+   - **加入路線：** 九巴和城巴步驟相同：選營運商，輸入路線號，選方向，再按站牌加入。只有一個方向的路線（例如循環線）會跳過選方向。清單上方會標示離 HA 家中位置最近的站牌。
+   - **只顯示所選方向：** 總站常由來回兩個方向共用，卡片只顯示你選的方向。兩個方向都要看的話，就各加一次。
+   - **一個方向有多個目的地：** 九巴部分路線同一方向有不同目的地，會分開列出，所以這類循環線也要選一次。
+   - **已加入的站點：** 九巴和城巴分開列出，依路線、方向、站牌排列。
+   - **隱藏班次：** 沒有寫方向的舊設定，可按「選擇顯示的班次」，取消勾選不想看的路線和目的地。
+
+   喜歡寫 YAML 的話，按編輯視窗左下角的「使用文字編輯器」，內容見 `examples/lovelace-card.yaml`。兩者讀寫同一份設定。
+
+更新版本後，把資源網址的 `?v=` 改為 `deploy.sh` 印出的新值，瀏覽器才會載入新版。
+
+### 圖形介面的限制
+
+- 第一次查詢九巴路線時會下載路線清單（約 350 KB），選方向後再下載全站清單（約 1.2 MB），每次開啟編輯視窗最多各一次。九巴的服務曾在短時間多次下載後拒絕全站清單（HTTP 403），這時無法選站牌，請稍後重試或改用 YAML。到站顯示不受影響。
+- 不能按站名搜尋，要先輸入路線號。
+- 「選擇顯示的班次」的選項來自該站的即時資料。收車後或暫停服務的路線可能不會列出；已隱藏的班次則一定會列出。
+- 介面暫時只有繁體中文。
+
+### 設定（卡片 YAML）
 
 | 欄位 | 說明 | 預設值 |
 |------|------|--------|
+| `title` | 卡片標題 | 無 |
 | `refresh_seconds` | 更新間隔（秒） | `30` |
 | `max_minutes` | 只顯示此分鐘數內到站的班次 | `30` |
 | `stops` | 要顯示的站點 | 必填 |
@@ -40,11 +54,27 @@
 | 欄位 | 說明 |
 |------|------|
 | `operator` | `kmb` 或 `ctb` |
-| `stop_id` | 營運商的站點 ID |
-| `name` | 看板顯示的站名 |
-| `routes` | 城巴必填：要查詢的路線；九巴會自動取得該站所有路線 |
+| `stop_id` | 營運商的站點 ID。純數字的 ID 要加引號，例如 `"002403"` |
+| `routes` | 要顯示的路線，城巴必填。九巴不寫時顯示該站所有路線 |
 
-`exclude` 每項可使用 `operator`、`stop`（對應 `name`）、`route`、`dir`（`I`／`O`）、`destination`。一條規則內的欄位要全部相符才會隱藏該班次。
+`routes` 每項可以只寫路線號，也可以寫成物件：
+
+| 欄位 | 說明 |
+|------|------|
+| `route` | 路線號 |
+| `dir` | `I` 或 `O`。不寫時顯示兩個方向 |
+| `service_type` | 九巴專用：同一方向有多個目的地時，指定其中一個 |
+| `label` | 編輯器顯示的方向文字，不影響卡片顯示的班次 |
+
+站名一律即時取自營運商，不存於設定，九巴站名後的站牌代碼（例如 `(WT916)`）不會顯示。每個站只查一次；查詢失敗時站頭欄暫時留空，到站時間不受影響，下次更新再試。
+
+`exclude` 每項可使用 `operator`、`stop_id`、`route`、`dir`（`I`／`O`）、`destination`。一條規則內的欄位要全部相符才會隱藏該班次。
+
+### 重複班次
+
+九巴會為同一班車的每個 `service_type` 各回傳一筆。同站、同路線、同方向而且 ETA 相同的班次只顯示一行，並保留 `service_type` 最小的一筆。
+
+`routes` 和 `exclude` 都先於去重執行。如果想顯示另一個目的地，用 `routes` 的 `service_type` 指定，或用 `exclude` 隱藏不要的一筆。
 
 ### 查找站點 ID
 
@@ -53,7 +83,7 @@
 
 ### 私隱
 
-`www/config.json` 已列入 `.gitignore`，因為你常用的站點會透露住處。另外 `/config/www/` 的檔案經 `/local/` 提供時**不需登入**，所以若 Home Assistant 對外開放，知道網址的人可以讀到此檔。
+站點只存於 dashboard 設定，要登入才能讀取。部署到 `/config/www/` 的只有卡片程式，不含個人資料。
 
 ### 開發
 
@@ -65,36 +95,54 @@ npm test
 
 後續工作見 [IMPROVEMENTS.md](IMPROVEMENTS.md)。
 
+### 授權
+
+[MIT](LICENSE)
+
 ---
 
 ## English
 
-A Hong Kong bus arrival board for Home Assistant dashboards, covering KMB and Citybus.
+A Lovelace card for Home Assistant that shows Hong Kong bus arrivals. It covers KMB and Citybus and follows your HA theme, including dark mode.
 
 Data comes from the government's open data APIs and is read directly by the browser. It needs no API key, integration or background service.
 
 ### Install
 
-1. Copy the example config and fill in your stops:
-
-   ```bash
-   cp www/config.example.json www/config.json
-   ```
-
-2. Deploy to Home Assistant:
+1. Deploy the card:
 
    ```bash
    ./deploy.sh <ssh-host>
    ```
 
-   Without SSH, copy the files in `www/` to `/config/www/buseta/`.
+   The command ends by printing the resource URL. Without SSH, copy the four `.js` files in `www/` to `/config/www/buseta/`. The resource URL is then `/local/buseta/buseta-card.js`.
 
-3. Add an iframe card to your dashboard, as shown in `examples/lovelace-card.yaml`.
+2. Add the resource: go to Settings → Dashboards → top-right menu → Resources, add that URL, and choose JavaScript module.
 
-### Configuration (`www/config.json`)
+3. Add a card to your dashboard and search for "Bus ETA". The edit dialog has a visual editor, so you don't need stop IDs:
+
+   - **Adding a route:** KMB and Citybus work the same way: choose the operator, enter a route number, choose a direction, then select a stop to add it. Routes with only one direction, such as circular routes, skip the direction step. The stop nearest your HA home location is marked above the list.
+   - **Only the chosen direction appears:** Both directions of a route often share a terminus, so the card shows only the one you chose. To see both, add each one.
+   - **Several destinations in one direction:** Some KMB routes have different destinations in the same direction. They are listed separately, so you also choose one for these circular routes.
+   - **Added stops:** KMB and Citybus are listed separately, in route, direction, then stop order.
+   - **Hiding buses:** For older entries with no direction, select 「選擇顯示的班次」 and untick the routes and destinations you don't want.
+
+   To write YAML instead, select the text editor option at the bottom left of the dialog. See `examples/lovelace-card.yaml`. Both read and write the same config.
+
+After an update, change the `?v=` in the resource URL to the new value printed by `deploy.sh`, so browsers load the new version.
+
+### Visual editor limits
+
+- The first KMB route lookup downloads the route list (about 350 KB). Choosing a direction then downloads the full stop list (about 1.2 MB). Each is downloaded at most once per edit dialog. KMB has refused the stop list (HTTP 403) after many downloads in a short time. You then can't choose a stop, so try again later or use YAML. Arrival times are not affected.
+- You can't search by stop name, so enter a route number first.
+- The options under 「選擇顯示的班次」 come from the stop's live data. Routes that have finished for the day or are suspended may be missing. Buses you have hidden are always listed.
+- The editor is in Traditional Chinese only for now.
+
+### Configuration (card YAML)
 
 | Field | Meaning | Default |
 |-------|---------|---------|
+| `title` | Card title | None |
 | `refresh_seconds` | Refresh interval in seconds | `30` |
 | `max_minutes` | Only show buses arriving within this many minutes | `30` |
 | `stops` | Stops to display | Required |
@@ -105,11 +153,27 @@ Fields for each entry in `stops`:
 | Field | Meaning |
 |-------|---------|
 | `operator` | `kmb` or `ctb` |
-| `stop_id` | The operator's stop ID |
-| `name` | Stop name shown on the board |
-| `routes` | Required for Citybus: routes to query. KMB returns every route at the stop |
+| `stop_id` | The operator's stop ID. Put all-digit IDs in quotes, such as `"002403"` |
+| `routes` | Routes to show. Required for Citybus. Without it, a KMB stop shows every route |
 
-Each `exclude` entry can use `operator`, `stop` (matches `name`), `route`, `dir` (`I` or `O`) and `destination`. A bus is hidden only when every field in the rule matches.
+Each entry in `routes` is a route number or an object:
+
+| Field | Meaning |
+|-------|---------|
+| `route` | Route number |
+| `dir` | `I` or `O`. Without it, both directions appear |
+| `service_type` | KMB only: picks one destination when a direction has several |
+| `label` | Direction text for the editor. It doesn't change which buses appear |
+
+Stop names always come live from the operator and aren't stored in the config. The stop code after a KMB name, such as `(WT916)`, isn't shown. Each stop is looked up once. If a lookup fails, the stop column stays blank until the next refresh, and arrival times are not affected.
+
+Each `exclude` entry can use `operator`, `stop_id`, `route`, `dir` (`I` or `O`) and `destination`. A bus is hidden only when every field in the rule matches.
+
+### Duplicate departures
+
+KMB returns a departure once for each `service_type`. Departures with the same stop, route, direction and ETA appear as one row, keeping the lowest `service_type`.
+
+`routes` and `exclude` both run before this step. To show the other destination, set `service_type` in `routes`, or hide the one you don't want with `exclude`.
 
 ### Finding stop IDs
 
@@ -118,7 +182,7 @@ Each `exclude` entry can use `operator`, `stop` (matches `name`), `route`, `dir`
 
 ### Privacy
 
-`www/config.json` is in `.gitignore` because your usual stops reveal where you live. Files under `/config/www/` are served through `/local/` **without authentication**, so if your Home Assistant is reachable from the internet, anyone who knows the URL can read this file.
+Your stops are stored only in the dashboard config, which requires a login to read. Only the card's code is deployed to `/config/www/`, and it holds no personal data.
 
 ### Development
 
@@ -129,3 +193,7 @@ npm test
 Requires Node.js 22 or later, with no other dependencies.
 
 See [IMPROVEMENTS.md](IMPROVEMENTS.md) for planned work.
+
+### License
+
+[MIT](LICENSE)

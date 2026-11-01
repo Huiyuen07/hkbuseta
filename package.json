@@ -1,7 +1,8 @@
 {
   "name": "buseta",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
+  "license": "MIT",
   "description": "Hong Kong bus arrival board for Home Assistant dashboards",
   "type": "module",
   "scripts": {
