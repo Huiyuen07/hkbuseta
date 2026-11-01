@@ -3,6 +3,13 @@ type: custom:buseta-card
 title: 巴士預計到站時間
 refresh_seconds: 30
 max_minutes: 30
+# 出門時間，0 為關閉 / leaving time, 0 turns it off
+leave_minutes: 5
+# auto、mono、led、icehouse
+color_scheme: auto
+grid_options:
+  columns: full
+  rows: 8
 stops:
   # 不寫 routes：顯示該站所有路線 / no routes: every route at the stop
   - operator: kmb

@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  COLUMNS,
+  axisTicks,
   displayName,
   fetchRows,
+  groupRows,
   selectRows,
   toRow,
   validateConfig,
@@ -186,6 +187,24 @@ test("validateConfig fills in defaults", () => {
   assert.deepEqual(config.exclude, []);
 });
 
+test("validateConfig gives a five minute leaving time and the theme colours", () => {
+  const config = validateConfig({ stops: [KMB_STOP] });
+  assert.equal(config.leave_minutes, 5);
+  assert.equal(config.color_scheme, "auto");
+});
+
+test("validateConfig rejects a colour scheme that does not exist", () => {
+  assert.throws(() => validateConfig({ color_scheme: "harbour" }), /color_scheme/);
+});
+
+test("validateConfig rejects a negative leaving time", () => {
+  assert.throws(() => validateConfig({ leave_minutes: -1 }), /leave_minutes/);
+});
+
+test("validateConfig accepts a leaving time of zero, which turns the marking off", () => {
+  assert.equal(validateConfig({ leave_minutes: 0 }).leave_minutes, 0);
+});
+
 test("validateConfig accepts a card with no stops yet", () => {
   assert.deepEqual(validateConfig({}).stops, []);
   assert.deepEqual(validateConfig({ stops: [] }).stops, []);
@@ -272,10 +291,6 @@ test("arrivals still appear when a stop name can't be loaded, and it is tried ag
   assert.equal(name, "Back");
 });
 
-test("the table headers say minutes and destination", () => {
-  assert.deepEqual(COLUMNS.map((column) => column.label), ["站頭", "路線", "目的地", "分鐘"]);
-});
-
 // KMB returns a departure once per service_type, with the same ETA to the second.
 const departure = (fields) => ({
   operator: "kmb",
@@ -329,4 +344,96 @@ test("different departures are not treated as duplicates", () => {
     departure({ serviceType: 1, operator: "ctb" }),
   ];
   assert.equal(selectRows(rows, { max_minutes: 30, exclude: [] }).length, 6);
+});
+
+test("toRow marks a departure the operator reports as scheduled", () => {
+  const raw = { route: "1", dest_tc: "X", eta: inMinutes(5), rmk_tc: "原定班次" };
+  assert.equal(toRow(raw, KMB_STOP, NOW).scheduled, true);
+});
+
+test("toRow treats a blank or other remark as a live departure", () => {
+  const blank = { route: "1", dest_tc: "X", eta: inMinutes(5), rmk_tc: "" };
+  const other = { ...blank, rmk_tc: "服務只限於星期一至五 (公眾假期除外)" };
+  const missing = { route: "1", dest_tc: "X", eta: inMinutes(5) };
+  assert.equal(toRow(blank, KMB_STOP, NOW).scheduled, false);
+  assert.equal(toRow(other, KMB_STOP, NOW).scheduled, false);
+  assert.equal(toRow(missing, KMB_STOP, NOW).scheduled, false);
+});
+
+const STOPS = [
+  { operator: "kmb", stop_id: "S1" },
+  { operator: "kmb", stop_id: "S2" },
+];
+const bus = (fields) => ({
+  operator: "kmb",
+  stopId: "S1",
+  stopName: "One",
+  route: "1",
+  destination: "X",
+  remainingMinutes: 10,
+  scheduled: false,
+  ...fields,
+});
+const group = (rows, leave = 5, stops = STOPS) => groupRows(rows, { stops, leave_minutes: leave });
+
+test("departures of a route share a lane in arrival order", () => {
+  const rows = [bus({ remainingMinutes: 3 }), bus({ remainingMinutes: 9 })];
+  const [{ lanes }] = group(rows);
+  assert.equal(lanes.length, 1);
+  assert.deepEqual(lanes[0].departures.map((item) => item.minutes), [3, 9]);
+});
+
+test("a route splits into two lanes when destinations differ", () => {
+  const rows = [bus({ destination: "X" }), bus({ destination: "Y" })];
+  assert.deepEqual(group(rows)[0].lanes.map((lane) => lane.destination), ["X", "Y"]);
+});
+
+test("departures inside the leaving time may be missed, and the first after it is next", () => {
+  const rows = [3, 5, 6, 9].map((remainingMinutes) => bus({ remainingMinutes }));
+  const { departures } = group(rows)[0].lanes[0];
+  assert.deepEqual(departures.map((item) => item.status), ["miss", "miss", "next", "later"]);
+});
+
+test("a leaving time of zero marks nothing as missed", () => {
+  const { departures } = group([bus({ remainingMinutes: 1 })], 0)[0].lanes[0];
+  assert.equal(departures[0].status, "next");
+});
+
+test("a scheduled departure stays marked in its lane", () => {
+  assert.equal(group([bus({ scheduled: true })])[0].lanes[0].departures[0].scheduled, true);
+});
+
+test("stops keep the config order whichever bus comes first", () => {
+  const rows = [
+    bus({ stopId: "S2", stopName: "Two", remainingMinutes: 1 }),
+    bus({ stopId: "S1", stopName: "One", remainingMinutes: 9 }),
+  ];
+  assert.deepEqual(group(rows).map((item) => item.name), ["One", "Two"]);
+});
+
+test("lanes are ordered by route number, not by who arrives first", () => {
+  const rows = ["68X", "10", "2"].map((route, index) => bus({ route, remainingMinutes: index + 6 }));
+  assert.deepEqual(group(rows)[0].lanes.map((lane) => lane.route), ["2", "10", "68X"]);
+});
+
+test("stops with the same name appear as one group", () => {
+  const rows = [
+    bus({ stopId: "S1", route: "1" }),
+    bus({ stopId: "S2", route: "2", stopName: "One" }),
+  ];
+  const groups = group(rows);
+  assert.equal(groups.length, 1);
+  assert.deepEqual(groups[0].lanes.map((lane) => lane.route), ["1", "2"]);
+});
+
+test("stops whose names failed to load are not merged", () => {
+  const rows = [bus({ stopId: "S1", stopName: "" }), bus({ stopId: "S2", stopName: "" })];
+  assert.equal(group(rows).length, 2);
+});
+
+test("the axis labels sit on round minutes", () => {
+  assert.deepEqual(axisTicks(30), [10, 20, 30]);
+  assert.deepEqual(axisTicks(45), [15, 30, 45]);
+  assert.deepEqual(axisTicks(20), [5, 10, 15, 20]);
+  assert.deepEqual(axisTicks(25), [10, 20]);
 });

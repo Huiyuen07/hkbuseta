@@ -2,7 +2,7 @@
 // Uses plain form controls: HA's own elements are lazy-loaded and change between releases.
 
 const version = new URL(import.meta.url).search;
-const { DEFAULTS, OPERATORS, escapeHtml, withNames } = await import(`./buseta.js${version}`);
+const { COLOR_SCHEMES, DEFAULTS, OPERATORS, escapeHtml, withNames } = await import(`./buseta.js${version}`);
 const {
   addStop,
   addedRoutes,
@@ -20,6 +20,9 @@ const {
 } = await import(`./buseta-config.js${version}`);
 
 const MIN_REFRESH_SECONDS = 10;
+const MIN_ROWS = 2;
+const MIN_COLUMNS = 1;
+const DEFAULT_ROWS = 8;
 
 const STYLE = `
   :host { color: var(--primary-text-color); display: block; }
@@ -72,6 +75,21 @@ const TEMPLATE = `
       <label><span>顯示多少分鐘內的班次</span>
         <input data-action="max" type="number" min="1" placeholder="${DEFAULTS.max_minutes}"></label>
     </div>
+    <div class="numbers">
+      <label><span>出門時間（分鐘，0 為關閉）</span>
+        <input data-action="leave" type="number" min="0" placeholder="${DEFAULTS.leave_minutes}"></label>
+      <label><span>配色</span>
+        <select data-action="scheme">
+          ${Object.entries(COLOR_SCHEMES).map(([id, name]) => `<option value="${id}">${name}</option>`).join("")}
+        </select></label>
+    </div>
+    <div class="numbers">
+      <label><span>卡片寬度（欄，留空為全寬）</span>
+        <input data-action="width" type="number" min="${MIN_COLUMNS}" placeholder="全寬"></label>
+      <label><span>卡片高度（行，最少 ${MIN_ROWS}）</span>
+        <input data-action="height" type="number" min="${MIN_ROWS}" placeholder="${DEFAULT_ROWS}"></label>
+    </div>
+    <div class="hint">每個區段 12 欄，每行約 64 像素。只在「區段」版面的 dashboard 生效。</div>
   </section>
   <section>
     <h3>已加入的站點</h3>
@@ -180,8 +198,22 @@ class BusetaCardEditor extends HTMLElement {
     this.#setSetting(key, value);
   }
 
+  // Card size is HA's own grid_options, so this and HA's Layout tab edit the same values.
+  #setGrid(key, input, minimum) {
+    const { grid_options: { [key]: _removed, ...kept } = {}, ...rest } = this.#config;
+    const value = input.value === "" ? undefined : Math.max(Number(input.value), minimum);
+    if (value !== undefined) input.value = value;
+    const grid = value === undefined ? kept : { ...kept, [key]: value };
+    this.#save(Object.keys(grid).length ? { ...rest, grid_options: grid } : rest);
+  }
+
   #renderSettings() {
+    const { columns, rows } = this.#config.grid_options ?? {};
     this.#find("[data-action=title]").value = this.#config.title ?? "";
+    this.#find("[data-action=leave]").value = this.#config.leave_minutes ?? "";
+    this.#find("[data-action=scheme]").value = this.#config.color_scheme ?? DEFAULTS.color_scheme;
+    this.#find("[data-action=width]").value = typeof columns === "number" ? columns : "";
+    this.#find("[data-action=height]").value = rows ?? "";
     this.#find("[data-action=refresh]").value = this.#config.refresh_seconds ?? "";
     this.#find("[data-action=max]").value = this.#config.max_minutes ?? "";
   }
@@ -394,6 +426,14 @@ class BusetaCardEditor extends HTMLElement {
         return this.#setNumber("refresh_seconds", input, MIN_REFRESH_SECONDS);
       case "max":
         return this.#setNumber("max_minutes", input, 1);
+      case "leave":
+        return this.#setNumber("leave_minutes", input, 0);
+      case "scheme":
+        return this.#setSetting("color_scheme", input.value);
+      case "width":
+        return this.#setGrid("columns", input, MIN_COLUMNS);
+      case "height":
+        return this.#setGrid("rows", input, MIN_ROWS);
       case "toggle":
         return this.#toggle(input);
       case "operator":

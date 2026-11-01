@@ -1,33 +1,262 @@
-// buseta-card — Lovelace card that shows Hong Kong bus arrivals.
+// buseta-card — Lovelace card that shows Hong Kong bus arrivals on a time axis.
 
 // Passing on the resource's ?v= keeps the other modules in step with the card.
 const version = new URL(import.meta.url).search;
-const { COLUMNS, escapeHtml, fetchRows, validateConfig } = await import(`./buseta.js${version}`);
+const { axisTicks, escapeHtml, fetchRows, groupRows, validateConfig } = await import(
+  `./buseta.js${version}`
+);
 
-const STYLE = `
-  ha-card { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
-  .rows { flex: 1; min-height: 0; overflow: auto; }
-  table { border-collapse: collapse; color: var(--primary-text-color); width: 100%; }
-  th, td { border: 1px solid var(--divider-color); padding: 10px; text-align: center; }
-  th {
-    background: var(--primary-color);
-    color: var(--text-primary-color);
-    position: sticky;
-    top: 0;
-  }
-  tbody tr:nth-child(even) { background: var(--secondary-background-color); }
+// Every colour comes from these tokens. `auto` and `mono` use the HA theme, so they
+// follow light and dark mode; the others draw their own background in both.
+const THEME_COLOURS = `
+  --bg: var(--ha-card-background, var(--card-background-color, #fff));
+  --ink: var(--primary-text-color);
+  --soft: var(--secondary-text-color);
+  --rail: var(--divider-color);
+  --hatch: var(--divider-color);
+`;
+const OPERATOR_COLOURS = `
+  --kmb: #c8102e;
+  --kmb-ink: #fff;
+  --ctb: #ffd100;
+  --ctb-ink: #14284b;
 `;
 
-const NO_STOPS = `<tr><td colspan="${COLUMNS.length}">請在卡片設定加入站點 / Add stops in the card settings</td></tr>`;
+const STYLE = `
+  ha-card {
+    --label: 130px;
+    --lane: 32px;
+    --pad-left: 16px;
+    --pad-right: 22px;
+    container-type: inline-size;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+  }
+  .scheme-auto { ${THEME_COLOURS} ${OPERATOR_COLOURS} }
+  .scheme-mono {
+    ${THEME_COLOURS}
+    --kmb: var(--ink);
+    --kmb-ink: var(--bg);
+    --ctb: var(--soft);
+    --ctb-ink: var(--bg);
+  }
+  .scheme-led {
+    --bg: #000;
+    --ink: #ffa800;
+    --soft: #c48a1c;
+    --rail: rgba(255, 168, 0, .3);
+    --hatch: rgba(255, 168, 0, .16);
+    --kmb: #ff5a36;
+    --kmb-ink: #000;
+    --ctb: #ffe100;
+    --ctb-ink: #000;
+  }
+  .scheme-icehouse {
+    --bg: #d3ecdf;
+    --ink: #123b33;
+    --soft: #47665d;
+    --rail: rgba(18, 59, 51, .22);
+    --hatch: rgba(18, 59, 51, .13);
+    --kmb: #a8201a;
+    --kmb-ink: #fff;
+    --ctb: #f0b100;
+    --ctb-ink: #2b1d00;
+  }
+  .scheme-led, .scheme-icehouse {
+    --ha-card-background: var(--bg);
+    --ha-card-header-color: var(--ink);
+    color: var(--ink);
+  }
+  .scroll { flex: 1; min-height: 0; overflow: auto; }
+  .chart { color: var(--ink); padding: 0 var(--pad-right) 4px var(--pad-left); position: relative; }
+  .message { color: var(--soft); padding: 16px 0; text-align: center; }
+  .band {
+    background: repeating-linear-gradient(135deg, var(--hatch) 0 2px, transparent 2px 8px);
+    border-right: 2px dashed var(--ink);
+    bottom: 0;
+    left: calc(var(--pad-left) + var(--label));
+    position: absolute;
+    top: 28px;
+  }
+  .axis {
+    background: var(--bg);
+    display: grid;
+    grid-template-columns: var(--label) minmax(0, 1fr);
+    height: 28px;
+    position: sticky;
+    top: 0;
+    z-index: 30;
+  }
+  .scale { position: relative; }
+  .tick {
+    bottom: 5px;
+    color: var(--soft);
+    font-size: 12px;
+    position: absolute;
+    transform: translateX(-50%);
+    white-space: nowrap;
+  }
+  .tick.now { color: var(--ink); transform: none; }
+  .tick.leave { color: var(--ink); font-weight: 700; }
+  .stop { font-size: 13px; font-weight: 700; margin: 0; padding: 6px 0 2px; position: relative; }
+  .lane {
+    align-items: center;
+    display: grid;
+    grid-template-columns: var(--label) minmax(0, 1fr);
+    height: var(--lane);
+    position: relative;
+  }
+  .who { align-items: center; display: flex; gap: 6px; min-width: 0; }
+  .plate {
+    border-radius: 4px;
+    flex: none;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 22px;
+    text-align: center;
+    width: 46px;
+  }
+  .kmb { background: var(--kmb); color: var(--kmb-ink); }
+  .ctb { background: var(--ctb); color: var(--ctb-ink); }
+  .destination { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .track { height: var(--lane); position: relative; }
+  .rail {
+    background: var(--rail);
+    height: 2px;
+    left: 0;
+    position: absolute;
+    right: 0;
+    top: calc(50% - 1px);
+  }
+  .dot {
+    align-items: center;
+    border-radius: 50%;
+    box-shadow: 0 0 0 2px var(--bg);
+    box-sizing: border-box;
+    display: flex;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    height: 24px;
+    justify-content: center;
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 24px;
+  }
+  .dot.next { font-size: 16px; height: 30px; width: 30px; }
+  .dot.scheduled { background: var(--bg); border: 2px dashed var(--ink); color: var(--ink); }
+  .dot.miss { background: var(--bg); border: 2px solid var(--soft); color: var(--soft); }
+  .foot {
+    align-items: center;
+    border-top: 1px solid var(--rail);
+    color: var(--soft);
+    display: flex;
+    flex: none;
+    flex-wrap: wrap;
+    font-size: 12px;
+    gap: 4px 12px;
+    padding: 8px 16px 10px;
+  }
+  .key { align-items: center; display: inline-flex; gap: 5px; }
+  .chip { border-radius: 50%; box-sizing: border-box; display: inline-block; height: 14px; width: 14px; }
+  .chip.area {
+    background: repeating-linear-gradient(135deg, var(--soft) 0 2px, transparent 2px 5px);
+    border-radius: 3px;
+  }
+  .chip.scheduled { border: 2px dashed var(--soft); }
+  .updated { margin-left: auto; }
+  @container (max-width: 440px) {
+    .chart { --label: 66px; --lane: 44px; }
+    .who { align-items: flex-start; flex-direction: column; gap: 2px; }
+    .destination { font-size: 11px; line-height: 13px; max-width: 62px; }
+  }
+`;
 
-const rowHtml = (row) =>
-  `<tr>${COLUMNS.map(({ field }) => `<td>${escapeHtml(row[field])}</td>`).join("")}</tr>`;
+const messageHtml = (text) => `<div class="message">${text}</div>`;
+const NO_STOPS = messageHtml("請在卡片設定加入站點 / Add stops in the card settings");
+const LOADING = messageHtml("載入中…");
+const FAILED = messageHtml("無法取得班次，稍後會自動重試");
+const NO_BUSES = messageHtml("暫無班次");
+
+const share = (minutes, config) => (Math.min(minutes, config.max_minutes) / config.max_minutes) * 100;
+
+// Earlier buses stack on top, because they are the ones that matter when two touch.
+const dotHtml = ({ minutes, scheduled, status }, index, operator, config) => {
+  const classes = ["dot", operator, status, ...(scheduled ? ["scheduled"] : [])].join(" ");
+  return `<span class="${classes}" style="left:${share(minutes, config)}%;z-index:${20 - index}">${minutes}</span>`;
+};
+
+const laneHtml = ({ operator, route, destination, departures }, config) => `
+  <div class="lane">
+    <div class="who">
+      <span class="plate ${operator}">${escapeHtml(route)}</span>
+      <span class="destination">${escapeHtml(destination)}</span>
+    </div>
+    <div class="track">
+      <span class="rail"></span>
+      ${departures.map((item, index) => dotHtml(item, index, operator, config)).join("")}
+    </div>
+  </div>`;
+
+const groupHtml = ({ name, lanes }, config) => `
+  <section>
+    <h3 class="stop">${escapeHtml(name)}</h3>
+    ${lanes.map((lane) => laneHtml(lane, config)).join("")}
+  </section>`;
+
+// The width is the track's share of the chart once the padding and label column are gone.
+function bandHtml({ leave_minutes: leave, max_minutes: max }) {
+  if (leave === 0) return "";
+  const ratio = Math.min(leave, max) / max;
+  const track = "100% - var(--pad-left) - var(--pad-right) - var(--label)";
+  return `<div class="band" style="width:calc((${track}) * ${ratio})"></div>`;
+}
+
+const tickHtml = (minutes, config, kind = "") =>
+  `<span class="tick ${kind}" style="left:${share(minutes, config)}%">${minutes}</span>`;
+
+function axisHtml(config) {
+  const { leave_minutes: leave, max_minutes: max } = config;
+  const ticks = axisTicks(max);
+  // A label of its own only where it won't sit on top of 現在 or a round minute.
+  const clear = leave > 2 && leave < max && ticks.every((tick) => Math.abs(tick - leave) > 1);
+  return `
+    <div class="axis">
+      <span></span>
+      <div class="scale">
+        <span class="tick now" style="left:0">現在</span>
+        ${clear ? tickHtml(leave, config, "leave") : ""}
+        ${ticks.map((tick) => tickHtml(tick, config)).join("")}
+      </div>
+    </div>`;
+}
+
+const chartHtml = (groups, config) =>
+  bandHtml(config) + axisHtml(config) + groups.map((group) => groupHtml(group, config)).join("");
+
+const clock = (date) =>
+  date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+
+function footHtml({ leave_minutes: leave }, updated, failed) {
+  const area = leave ? `<span class="key"><span class="chip area"></span>${leave} 分鐘內未必趕到</span>` : "";
+  const status = [
+    ...(updated ? [`更新於 ${clock(updated)}`] : []),
+    ...(failed ? ["更新失敗"] : []),
+  ].join("，");
+  return `${area}<span class="key"><span class="chip scheduled"></span>原定班次</span>
+    <span class="updated">${status}</span>`;
+}
 
 class BusetaCard extends HTMLElement {
   #config;
-  #body;
+  #chart;
+  #foot;
   #timer;
   #connected = false;
+  #updated;
 
   static getStubConfig() {
     return { stops: [] };
@@ -40,17 +269,17 @@ class BusetaCard extends HTMLElement {
 
   setConfig(config) {
     this.#config = validateConfig(config);
+    this.#updated = undefined;
     const root = this.shadowRoot ?? this.attachShadow({ mode: "open" });
     const header = config.title ? ` header="${escapeHtml(config.title)}"` : "";
-    const headings = COLUMNS.map(({ label }) => `<th>${label}</th>`).join("");
     root.innerHTML = `
       <style>${STYLE}</style>
-      <ha-card${header}>
-        <div class="rows">
-          <table><thead><tr>${headings}</tr></thead><tbody></tbody></table>
-        </div>
+      <ha-card class="scheme-${this.#config.color_scheme}"${header}>
+        <div class="scroll"><div class="chart"></div></div>
+        <div class="foot"></div>
       </ha-card>`;
-    this.#body = root.querySelector("tbody");
+    this.#chart = root.querySelector(".chart");
+    this.#foot = root.querySelector(".foot");
     if (this.#connected) this.#start();
   }
 
@@ -75,9 +304,10 @@ class BusetaCard extends HTMLElement {
   #start() {
     this.#stop();
     if (this.#config.stops.length === 0) {
-      this.#body.innerHTML = NO_STOPS;
+      this.#chart.innerHTML = NO_STOPS;
       return;
     }
+    this.#chart.innerHTML = LOADING;
     this.#refresh();
     this.#timer = setInterval(() => this.#refresh(), this.#config.refresh_seconds * 1000);
   }
@@ -87,13 +317,27 @@ class BusetaCard extends HTMLElement {
     this.#timer = undefined;
   }
 
+  #show(rows) {
+    const config = this.#config;
+    const groups = groupRows(rows, config);
+    this.#chart.innerHTML = groups.length ? chartHtml(groups, config) : NO_BUSES;
+    this.#updated = new Date();
+    this.#foot.innerHTML = footHtml(config, this.#updated, false);
+  }
+
+  #showFailure() {
+    if (!this.#updated) this.#chart.innerHTML = FAILED;
+    this.#foot.innerHTML = footHtml(this.#config, this.#updated, true);
+  }
+
   async #refresh() {
     const config = this.#config;
     try {
       const rows = await fetchRows(config);
-      if (config === this.#config) this.#body.innerHTML = rows.map(rowHtml).join("");
+      if (config === this.#config) this.#show(rows);
     } catch (error) {
       console.error("無法獲取巴士數據：", error);
+      if (config === this.#config) this.#showFailure();
     }
   }
 }

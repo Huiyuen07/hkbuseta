@@ -12,14 +12,19 @@ const STOP_URLS = {
   ctb: (stopId) => `${CTB_API}/stop/${stopId}`,
 };
 
-export const DEFAULTS = { refresh_seconds: 30, max_minutes: 30 };
+export const DEFAULTS = {
+  refresh_seconds: 30,
+  max_minutes: 30,
+  leave_minutes: 5,
+  color_scheme: "auto",
+};
 
-export const COLUMNS = [
-  { label: "站頭", field: "stopName" },
-  { label: "路線", field: "route" },
-  { label: "目的地", field: "destination" },
-  { label: "分鐘", field: "remainingMinutes" },
-];
+export const COLOR_SCHEMES = {
+  auto: "跟隨主題",
+  mono: "墨色",
+  led: "車頭牌",
+  icehouse: "冰室",
+};
 
 const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
 export const escapeHtml = (value) => String(value).replace(/[&<>"]/g, (char) => ESCAPES[char]);
@@ -47,7 +52,14 @@ export function validateConfig(config) {
       }
     }
   }
-  return { ...DEFAULTS, exclude: [], ...config, stops };
+  const merged = { ...DEFAULTS, exclude: [], ...config, stops };
+  if (!Object.hasOwn(COLOR_SCHEMES, merged.color_scheme)) {
+    throw new Error(`buseta: unsupported color_scheme "${merged.color_scheme}"`);
+  }
+  if (!(merged.leave_minutes >= 0)) {
+    throw new Error("buseta: `leave_minutes` must be 0 or more");
+  }
+  return merged;
 }
 
 // Turn one raw ETA record into a table row, or null if it has no future ETA.
@@ -65,6 +77,7 @@ export function toRow(raw, stop, now) {
     serviceType: raw.service_type,
     eta: raw.eta,
     remainingMinutes: Math.ceil((etaMs - now.getTime()) / 60000),
+    scheduled: raw.rmk_tc === "原定班次",
   };
 }
 
@@ -114,6 +127,54 @@ export function selectRows(rows, config) {
   return removeDuplicates(kept)
     .filter((row) => row.remainingMinutes <= config.max_minutes)
     .sort((a, b) => a.remainingMinutes - b.remainingMinutes);
+}
+
+export const compareRoutes = (a, b) => a.localeCompare(b, undefined, { numeric: true });
+
+// Groups by name because KMB and Citybus give one physical stop different IDs.
+// A name that failed to load is blank, so it falls back to the ID.
+const groupKey = (row) => row.stopName || `${row.operator}:${row.stopId}`;
+
+function compareLanes(a, b) {
+  return compareRoutes(a.route, b.route) || a.destination.localeCompare(b.destination);
+}
+
+function addDeparture(lane, row, leaveMinutes) {
+  const passed = lane.departures.some(({ status }) => status === "next");
+  const status = row.remainingMinutes <= leaveMinutes ? "miss" : passed ? "later" : "next";
+  lane.departures.push({ minutes: row.remainingMinutes, scheduled: row.scheduled, status });
+}
+
+// Expects rows soonest first, as selectRows gives them. The order of stops and lanes
+// ignores arrival time, so nothing on a wall panel moves about between refreshes.
+export function groupRows(rows, { stops, leave_minutes: leaveMinutes }) {
+  const configOrder = (row) =>
+    stops.findIndex((stop) => stop.operator === row.operator && stop.stop_id === row.stopId);
+  const groups = new Map();
+  for (const row of [...rows].sort((a, b) => configOrder(a) - configOrder(b))) {
+    const key = groupKey(row);
+    if (!groups.has(key)) groups.set(key, { name: row.stopName, lanes: new Map() });
+    const { lanes } = groups.get(key);
+    const laneKey = [row.operator, row.route, row.destination].join("|");
+    if (!lanes.has(laneKey)) {
+      const { operator, route, destination } = row;
+      lanes.set(laneKey, { operator, route, destination, departures: [] });
+    }
+    addDeparture(lanes.get(laneKey), row, leaveMinutes);
+  }
+  return [...groups.values()].map(({ name, lanes }) => ({
+    name,
+    lanes: [...lanes.values()].sort(compareLanes),
+  }));
+}
+
+const AXIS_STEPS = [5, 10, 15, 20, 30, 60];
+
+export function axisTicks(maxMinutes) {
+  const step = AXIS_STEPS.find((size) => maxMinutes / size <= 4) ?? Math.ceil(maxMinutes / 4);
+  const ticks = [];
+  for (let minute = step; minute <= maxMinutes; minute += step) ticks.push(minute);
+  return ticks;
 }
 
 export async function getData(fetchFn, url) {

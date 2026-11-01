@@ -6,6 +6,7 @@ const {
   CTB_API,
   KMB_API,
   OPERATORS,
+  compareRoutes,
   displayName,
   getData,
   matchesRule,
@@ -152,8 +153,6 @@ export function routeEntry(route, { label, dir, variants }, stopId) {
 const directionLabel = (entry) => entry.label ?? entry.dir ?? "全部方向";
 
 export const routeLabel = (entry) => `${routeName(entry)} ${directionLabel(entry)}`;
-
-const compareRoutes = (a, b) => a.localeCompare(b, undefined, { numeric: true });
 
 // `index` and `routeIndex` give the row's place in the config, as removeRoute takes them.
 function addedRows({ operator, name: stop, routes }, index) {
