@@ -4,59 +4,35 @@
 
 ## 中文
 
-Home Assistant 的 Lovelace 卡片，以時間軸顯示香港巴士預計到站時間，支援九巴（KMB）和城巴（Citybus）。卡片會標示出門來不及的班次，並提供四款配色。
+香港本地化的Home Assistant Repo！希望可以聚集更多本地使用者
+
+這是一個Dashboard 的卡片，以時間軸顯示香港巴士預計到站時間，目前支援九巴（KMB）和城巴（Citybus），歡迎加入其他有用的營辦商資料。卡片會標示出門來不及的班次。
 
 ![巴士到站卡片](images/card.png)
 
-資料來自政府開放數據 API，由瀏覽器直接讀取，不需要 API key、整合或背景服務。
+資料來自政府開放數據 API。
 
 ### 安裝
 
-1. 部署卡片：
+#### 方法一：HACS（建議）
 
-   ```bash
-   ./deploy.sh <ssh-host>
-   ```
+1. 在 HACS 右上角選單選「Custom repositories」，Repository 填 `https://github.com/Huiyuen07/hkbuseta`，Type 選「Dashboard」。
+2. 在 HACS 搜尋「Bus ETA」並下載，然後重新整理瀏覽器。(有待HACS審批)
 
-   指令最後會印出資源網址。沒有 SSH 的話，把 `dist/` 內的四個 `.js` 檔複製到 `/config/www/buseta/`，資源網址就是 `/local/buseta/buseta-card.js`。
+HACS 會自動加入資源，版本更新也在 HACS 完成。如果資源是用 YAML 管理，要自行加入 `/hacsfiles/hkbuseta/buseta-card.js`。
 
-2. 加入資源：到「設定 → 儀表板 → 右上角選單 → 資源」新增上述網址，類型選「JavaScript 模組」。
+#### 方法二：手動下載
 
-3. 在 dashboard 新增卡片，搜尋「Bus ETA」。編輯視窗可以用圖形介面設定，不用查站點 ID：
+1. 下載[最新版本](https://github.com/Huiyuen07/hkbuseta/releases/latest)，把 `dist/` 內的四個 `.js` 檔複製到 `/config/www/buseta/`。有 SSH 的話，可以改為在 repo 內執行 `./deploy.sh <ssh-host>`，指令最後會印出資源網址。
+2. 加入資源：到「設定 → 儀表板 → 右上角選單 → 資源」新增 `/local/buseta/buseta-card.js`，類型選「JavaScript 模組」。
 
-   - **加入路線：** 九巴和城巴步驟相同：選營運商，輸入路線號，選方向，再按站牌加入。只有一個方向的路線（例如循環線）會跳過選方向。清單上方會標示離 HA 家中位置最近的站牌。
-   - **只顯示所選方向：** 總站常由來回兩個方向共用，卡片只顯示你選的方向。兩個方向都要看的話，就各加一次。
-   - **一個方向有多個目的地：** 九巴部分路線同一方向有不同目的地，會分開列出，所以這類循環線也要選一次。
-   - **已加入的站點：** 九巴和城巴分開列出，依路線、方向、站牌排列。
-   - **隱藏班次：** 沒有寫方向的舊設定，可按「選擇顯示的班次」，取消勾選不想看的路線和目的地。
+更新版本後，要在資源網址加上或更改 `?v=`（`deploy.sh` 會印出新值），瀏覽器才會載入新版。
 
-   - **出門時間：** 這段時間內到站的班次會顯示為空心圓點，表示未必趕到；第一班趕得及的圓點會加大。填 `0` 可關閉。
-   - **配色：** 「跟隨主題」（九巴紅、城巴黃）和「墨色」跟隨 HA 淺色或深色主題；「車頭牌」和「冰室」使用固定底色。
-   - **卡片寬度和高度：** 「區段」版面每個區段 12 欄，每行約 64 像素，與 HA「佈局」分頁修改同一組數值。寬度留空即全寬。路線放不下時，卡片內可捲動，時間刻度固定在頂部。
+### 新增卡片
 
-   喜歡寫 YAML 的話，按編輯視窗左下角的「使用文字編輯器」，內容見 `examples/lovelace-card.yaml`。兩者讀寫同一份設定。
+在 Dashboard 新增卡片，搜尋「Bus ETA」，再用編輯視窗設定，不用查站點 ID。
 
-### 看懂時間軸
-
-- 同一站的路線放在一起，每條路線加目的地佔一條軌道，按路線號排列，不會因班次而改變位置。
-- 該段時間內沒有班次的路線不會顯示。
-- 實心圓點是實時班次，虛線圓點是營運商標明的「原定班次」，空心圓點在出門時間內。出門時間內的原定班次是灰色虛線。
-- 圓點太近時會縮小，並在軌道上下錯開。卡片改變寬度後，下次更新才會重新排列。
-- 營運商的其他備註顯示在該條軌道下方。
-- 底部顯示最後更新時間。某個站更新失敗或 15 秒內沒有回應時，其他站照常更新，底部會列出失敗的站。
-- 失敗的站沿用上次的班次，分鐘數會繼續倒數，到站的班次會消失。
-- 頁面隱藏時暫停更新，回到頁面時立即更新。
-
-更新版本後，把資源網址的 `?v=` 改為 `deploy.sh` 印出的新值，瀏覽器才會載入新版。
-
-### 圖形介面的限制
-
-- 第一次查詢九巴路線時會下載路線清單（約 350 KB），選方向後再下載全站清單（約 1.2 MB），每次開啟編輯視窗最多各一次。九巴的服務曾在短時間多次下載後拒絕全站清單（HTTP 403），這時無法選站牌，請稍後重試或改用 YAML。到站顯示不受影響。
-- 不能按站名搜尋，要先輸入路線號。
-- 「選擇顯示的班次」的選項來自該站的即時資料。收車後或暫停服務的路線可能不會列出；已隱藏的班次則一定會列出。
-- 城巴部分站牌載入失敗時，清單仍會列出其餘站牌並提示，稍後再查詢一次即可補回。
-- 介面暫時只有繁體中文。
-- 卡片寬度和高度只在「區段」版面生效，舊式版面由 HA 決定大小。
+喜歡寫 YAML 的話，按編輯視窗左下角的「使用文字編輯器」，內容見 `examples/lovelace-card.yaml`。兩者讀寫同一份設定。
 
 ### 設定（卡片 YAML）
 
@@ -88,34 +64,13 @@ Home Assistant 的 Lovelace 卡片，以時間軸顯示香港巴士預計到站�
 | `service_type` | 九巴專用：同一方向有多個目的地時，指定其中一個 |
 | `label` | 編輯器顯示的方向文字，不影響卡片顯示的班次 |
 
-站名一律即時取自營運商，不存於設定，九巴站名後的站牌代碼（例如 `(WT916)`）不會顯示。每個站只查一次。查詢失敗或兩秒內沒有回應時，站名暫時留空，到站時間照常顯示，之後的更新會補上。
-
-`exclude` 每項可使用 `operator`、`stop_id`、`route`、`dir`（`I`／`O`）、`service_type`（九巴專用）、`destination`。一條規則內的欄位要全部相符才會隱藏該班次。
-
-圖形介面隱藏班次時，規則靠目的地文字比對，營運商改字後要重新隱藏。手寫規則可以改用 `service_type`，不受改字影響。
+站名一律即時取自營運商，不存於設定，九巴站名後的站牌代碼（例如 `(WT916)`）不會顯示。
 
 ### 重複班次
 
 九巴會為同一班車的每個 `service_type` 各回傳一筆。同站、同路線、同方向而且 ETA 相同的班次只顯示一個圓點，並保留 `service_type` 最小的一筆。
 
 `routes` 和 `exclude` 都先於去重執行。如果想顯示另一個目的地，用 `routes` 的 `service_type` 指定，或用 `exclude` 隱藏不要的一筆。
-
-### 查找站點 ID
-
-- 九巴：`https://data.etabus.gov.hk/v1/transport/kmb/stop` 列出全部站點，以 `name_tc` 搜尋。
-- 城巴：`https://rt.data.gov.hk/v2/transport/citybus/route-stop/ctb/<路線>/inbound`（或 `outbound`）列出路線上的站點 ID，再用 `https://rt.data.gov.hk/v2/transport/citybus/stop/<站點 ID>` 確認站名。
-
-### 私隱
-
-站點只存於 dashboard 設定，要登入才能讀取。部署到 `/config/www/` 的只有卡片程式，不含個人資料。
-
-### 開發
-
-```bash
-npm test
-```
-
-只需 Node.js 22 或以上，沒有其他依賴。
 
 ### 授權
 
@@ -125,59 +80,35 @@ npm test
 
 ## English
 
-A Lovelace card for Home Assistant that shows Hong Kong bus arrivals on a time axis. It covers KMB and Citybus, marks buses you may be too late for, and comes in four color schemes.
+A Home Assistant repo localized for Hong Kong! We hope it brings more local users together.
+
+This is a Dashboard card that shows Hong Kong bus arrivals on a time axis. It currently supports KMB and Citybus, and data for other useful operators is welcome. The card marks buses you may be too late for.
 
 ![Bus arrival card](images/card.png)
 
-Data comes from the government's open data APIs and is read directly by the browser. It needs no API key, integration or background service.
+Data comes from the government's open data APIs.
 
 ### Install
 
-1. Deploy the card:
+#### Option 1: HACS (recommended)
 
-   ```bash
-   ./deploy.sh <ssh-host>
-   ```
+1. In HACS, open the top-right menu and choose Custom repositories. Enter `https://github.com/Huiyuen07/hkbuseta` as the repository and choose Dashboard as the type.
+2. Search for "Bus ETA" in HACS, download it, then refresh your browser. (Pending HACS approval)
 
-   The command ends by printing the resource URL. Without SSH, copy the four `.js` files in `dist/` to `/config/www/buseta/`. The resource URL is then `/local/buseta/buseta-card.js`.
+HACS adds the resource for you and handles updates. If you manage resources in YAML, add `/hacsfiles/hkbuseta/buseta-card.js` yourself.
 
-2. Add the resource: go to Settings → Dashboards → top-right menu → Resources, add that URL, and choose JavaScript module.
+#### Option 2: Manual download
 
-3. Add a card to your dashboard and search for "Bus ETA". The edit dialog has a visual editor, so you don't need stop IDs:
+1. Download the [latest release](https://github.com/Huiyuen07/hkbuseta/releases/latest) and copy the four `.js` files in `dist/` to `/config/www/buseta/`. With SSH, you can instead run `./deploy.sh <ssh-host>` from the repo. The command ends by printing the resource URL.
+2. Add the resource: go to Settings → Dashboards → top-right menu → Resources, add `/local/buseta/buseta-card.js`, and choose JavaScript module.
 
-   - **Adding a route:** KMB and Citybus work the same way: choose the operator, enter a route number, choose a direction, then select a stop to add it. Routes with only one direction, such as circular routes, skip the direction step. The stop nearest your HA home location is marked above the list.
-   - **Only the chosen direction appears:** Both directions of a route often share a terminus, so the card shows only the one you chose. To see both, add each one.
-   - **Several destinations in one direction:** Some KMB routes have different destinations in the same direction. They are listed separately, so you also choose one for these circular routes.
-   - **Added stops:** KMB and Citybus are listed separately, in route, direction, then stop order.
-   - **Hiding buses:** For older entries with no direction, select 「選擇顯示的班次」 and untick the routes and destinations you don't want.
+After an update, add or change `?v=` in the resource URL (`deploy.sh` prints the new value), so browsers load the new version.
 
-   - **Leaving time:** Buses arriving within this time appear as hollow dots, because you may not make them. The first bus you can catch gets a larger dot. Enter `0` to turn this off.
-   - **Color scheme:** 「跟隨主題」 (KMB red and Citybus yellow) and 「墨色」 follow your HA light or dark theme. 「車頭牌」 and 「冰室」 use a fixed background.
-   - **Card width and height:** In the Sections layout, each section has 12 columns and each row is about 64 pixels. These are the same values as HA's Layout tab. Leave the width blank for full width. When routes don't fit, the card scrolls and the time scale stays at the top.
+### Add the card
 
-   To write YAML instead, select the text editor option at the bottom left of the dialog. See `examples/lovelace-card.yaml`. Both read and write the same config.
+Add a card to your dashboard, search for "Bus ETA", and set it up in the edit dialog. You don't need stop IDs.
 
-### Reading the time axis
-
-- Routes at the same stop are grouped. Each route and destination has its own track, ordered by route number, so tracks don't move as buses come and go.
-- Routes with no bus in the time shown don't appear.
-- A solid dot is a live departure, a dashed dot is one the operator marks as scheduled (「原定班次」), and a hollow dot is inside your leaving time. A scheduled departure inside your leaving time is gray and dashed.
-- Dots that are too close shrink and move above and below the track. After the card changes width, they rearrange at the next update.
-- Other operator remarks appear under the track.
-- The footer shows the last update time. If a stop fails or gets no response within 15 seconds, the other stops still update and the footer names the failed stop with 「更新失敗」 (update failed).
-- A failed stop keeps its last buses. Their minutes keep counting down, and buses that have arrived disappear.
-- Updates pause while the page is hidden and run at once when you return.
-
-After an update, change the `?v=` in the resource URL to the new value printed by `deploy.sh`, so browsers load the new version.
-
-### Visual editor limits
-
-- The first KMB route lookup downloads the route list (about 350 KB). Choosing a direction then downloads the full stop list (about 1.2 MB). Each is downloaded at most once per edit dialog. KMB has refused the stop list (HTTP 403) after many downloads in a short time. You then can't choose a stop, so try again later or use YAML. Arrival times are not affected.
-- You can't search by stop name, so enter a route number first.
-- The options under 「選擇顯示的班次」 come from the stop's live data. Routes that have finished for the day or are suspended may be missing. Buses you have hidden are always listed.
-- If some Citybus stops fail to load, the list shows the rest with a notice. Search again later to get the missing ones.
-- The editor is in Traditional Chinese only for now.
-- Card width and height only apply in the Sections layout. In older layouts, HA decides the size.
+To write YAML instead, select the text editor option at the bottom left of the dialog. See `examples/lovelace-card.yaml`. Both read and write the same config.
 
 ### Configuration (card YAML)
 
@@ -209,34 +140,13 @@ Each entry in `routes` is a route number or an object:
 | `service_type` | KMB only: picks one destination when a direction has several |
 | `label` | Direction text for the editor. It doesn't change which buses appear |
 
-Stop names always come live from the operator and aren't stored in the config. The stop code after a KMB name, such as `(WT916)`, isn't shown. Each stop is looked up once. If a lookup fails or takes more than two seconds, the stop name stays blank, arrival times still appear, and a later update fills the name in.
-
-Each `exclude` entry can use `operator`, `stop_id`, `route`, `dir` (`I` or `O`), `service_type` (KMB only) and `destination`. A bus is hidden only when every field in the rule matches.
-
-Rules made in the editor match destination text, so if an operator rewords it, hide the bus again. Hand-written rules can use `service_type` instead, which isn't affected by rewording.
+Stop names always come live from the operator and aren't stored in the config. The stop code after a KMB name, such as `(WT916)`, isn't shown.
 
 ### Duplicate departures
 
 KMB returns a departure once for each `service_type`. Departures with the same stop, route, direction and ETA appear as one dot, keeping the lowest `service_type`.
 
 `routes` and `exclude` both run before this step. To show the other destination, set `service_type` in `routes`, or hide the one you don't want with `exclude`.
-
-### Finding stop IDs
-
-- KMB: `https://data.etabus.gov.hk/v1/transport/kmb/stop` lists every stop. Search by `name_tc`.
-- Citybus: `https://rt.data.gov.hk/v2/transport/citybus/route-stop/ctb/<route>/inbound` (or `outbound`) lists the stop IDs on a route. Confirm a name with `https://rt.data.gov.hk/v2/transport/citybus/stop/<stop-id>`.
-
-### Privacy
-
-Your stops are stored only in the dashboard config, which requires a login to read. Only the card's code is deployed to `/config/www/`, and it holds no personal data.
-
-### Development
-
-```bash
-npm test
-```
-
-Requires Node.js 22 or later, with no other dependencies.
 
 ### License
 
