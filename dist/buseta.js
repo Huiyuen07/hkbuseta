@@ -1,9 +1,14 @@
 // buseta — fetch and normalise Hong Kong bus ETAs.
 // Pure logic lives here so it can be tested without a browser.
 
+const version = new URL(import.meta.url).search;
+const { DEFAULT_LANGUAGE, LANGUAGES, LANGUAGE_CHOICES, localText } = await import(
+  `./buseta-i18n.js${version}`
+);
+
 export const KMB_API = "https://data.etabus.gov.hk/v1/transport/kmb";
 export const CTB_API = "https://rt.data.gov.hk/v2/transport/citybus";
-export const OPERATORS = { kmb: "九巴", ctb: "城巴" };
+export const OPERATORS = ["kmb", "ctb"];
 
 const KMB_STOP_ETA = (stopId) => `${KMB_API}/stop-eta/${stopId}/`;
 const CTB_ETA = (stopId, route) => `${CTB_API}/eta/ctb/${stopId}/${route}`;
@@ -12,6 +17,7 @@ const STOP_URLS = {
   ctb: (stopId) => `${CTB_API}/stop/${stopId}`,
 };
 
+// Read from `rmk_tc` whatever the language, so it never depends on a translation.
 const SCHEDULED = "原定班次";
 
 // Long enough for KMB's full stop list, which the editor downloads.
@@ -28,14 +34,10 @@ export const DEFAULTS = {
   max_minutes: 30,
   leave_minutes: 5,
   color_scheme: "auto",
+  language: DEFAULT_LANGUAGE,
 };
 
-export const COLOR_SCHEMES = {
-  auto: "跟隨主題",
-  mono: "墨色",
-  led: "車頭牌",
-  icehouse: "冰室",
-};
+export const COLOR_SCHEMES = ["auto", "mono", "led", "icehouse"];
 
 const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
 export const escapeHtml = (value) => String(value).replace(/[&<>"]/g, (char) => ESCAPES[char]);
@@ -48,7 +50,7 @@ export function validateConfig(config) {
     if (typeof stop.stop_id !== "string") {
       throw new Error(`buseta: \`stop_id\` ${stop.stop_id} must be in quotes`);
     }
-    if (!Object.hasOwn(OPERATORS, stop.operator)) {
+    if (!OPERATORS.includes(stop.operator)) {
       throw new Error(`buseta: unsupported operator "${stop.operator}"`);
     }
     if (stop.routes !== undefined && !Array.isArray(stop.routes)) {
@@ -64,8 +66,11 @@ export function validateConfig(config) {
     }
   }
   const merged = { ...DEFAULTS, exclude: [], ...config, stops };
-  if (!Object.hasOwn(COLOR_SCHEMES, merged.color_scheme)) {
+  if (!COLOR_SCHEMES.includes(merged.color_scheme)) {
     throw new Error(`buseta: unsupported color_scheme "${merged.color_scheme}"`);
+  }
+  if (!LANGUAGE_CHOICES.includes(merged.language)) {
+    throw new Error(`buseta: unsupported language "${merged.language}"`);
   }
   for (const [key, minimum] of Object.entries(MINIMUMS)) {
     if (!Number.isFinite(merged[key]) || merged[key] < minimum) {
@@ -76,23 +81,26 @@ export function validateConfig(config) {
 }
 
 // Turn one raw ETA record into a table row, or null if it has no future ETA.
-export function toRow(raw, stop, now) {
+// `destination` stays in Traditional Chinese because exclude rules and lanes are keyed on
+// it. `destinationName` and `remark` are in the chosen language, for display.
+export function toRow(raw, stop, now, language = DEFAULT_LANGUAGE) {
   if (!raw.eta) return null;
   const etaMs = new Date(raw.eta).getTime();
   if (etaMs <= now.getTime()) return null;
-  const remark = raw.rmk_tc ?? "";
   return {
     operator: stop.operator,
     stopId: stop.stop_id,
     stopName: stop.name,
+    stopGroup: stop.groupName ?? stop.name,
     route: raw.route,
     dir: raw.dir,
     destination: raw.dest_tc,
+    destinationName: localText(raw, "dest", language) ?? raw.dest_tc,
     serviceType: raw.service_type,
     eta: raw.eta,
     remainingMinutes: Math.ceil((etaMs - now.getTime()) / 60000),
-    scheduled: remark === SCHEDULED,
-    remark,
+    scheduled: raw.rmk_tc === SCHEDULED,
+    remark: localText(raw, "rmk", language) ?? "",
   };
 }
 
@@ -130,7 +138,7 @@ export function matchesRule(row, rule) {
 function removeDuplicates(rows) {
   const departures = new Map();
   for (const row of rows) {
-    const key = [row.operator, row.stopName, row.route, row.dir, row.eta].join("|");
+    const key = [row.operator, row.stopGroup ?? row.stopName, row.route, row.dir, row.eta].join("|");
     const kept = departures.get(key);
     if (!kept || row.serviceType < kept.serviceType) departures.set(key, row);
   }
@@ -147,9 +155,10 @@ export function selectRows(rows, config) {
 
 export const compareRoutes = (a, b) => a.localeCompare(b, undefined, { numeric: true });
 
-// Groups by name because KMB and Citybus give one physical stop different IDs.
-// A name that failed to load is blank, so it falls back to the ID.
-const groupKey = (row) => row.stopName || `${row.operator}:${row.stopId}`;
+// Groups by name because KMB and Citybus give one physical stop different IDs. The
+// Traditional Chinese name is used in every language: KMB writes English names in capitals
+// and Citybus does not. A name that failed to load is blank, so it falls back to the ID.
+const groupKey = (row) => (row.stopGroup ?? row.stopName) || `${row.operator}:${row.stopId}`;
 
 function compareLanes(a, b) {
   return compareRoutes(a.route, b.route) || a.destination.localeCompare(b.destination);
@@ -167,7 +176,7 @@ function laneDepartures(rows, leaveMinutes) {
 }
 
 const laneNotes = (rows) => [
-  ...new Set(rows.map(({ remark }) => remark).filter((remark) => remark && remark !== SCHEDULED)),
+  ...new Set(rows.filter(({ remark, scheduled }) => remark && !scheduled).map(({ remark }) => remark)),
 ];
 
 // The order of stops and lanes ignores arrival time, so nothing on a wall panel moves
@@ -182,8 +191,8 @@ export function groupRows(rows, { stops, leave_minutes: leaveMinutes }) {
     const { lanes } = groups.get(key);
     const laneKey = [row.operator, row.route, row.destination].join("|");
     if (!lanes.has(laneKey)) {
-      const { operator, route, destination } = row;
-      lanes.set(laneKey, { operator, route, destination, rows: [] });
+      const { operator, route, destination, destinationName = destination } = row;
+      lanes.set(laneKey, { operator, route, destination: destinationName, rows: [] });
     }
     lanes.get(laneKey).rows.push(row);
   }
@@ -255,30 +264,46 @@ function withinTime(promise, milliseconds, fallback) {
 // KMB ends most stop names with its own stop code, such as 「(WT916)」.
 export const displayName = (name) => name.replace(/\s*\([A-Z]{2}\d{3}[a-z]?\)$/, "");
 
-async function fetchStopName({ operator, stop_id: stopId }, fetchFn) {
-  const { name_tc: name } = await getData(fetchFn, STOP_URLS[operator](stopId));
-  return displayName(name);
+// A stop's name in each language, as { tc, sc, en }.
+async function fetchStopNames({ operator, stop_id: stopId }, fetchFn) {
+  const stop = await getData(fetchFn, STOP_URLS[operator](stopId));
+  return Object.fromEntries(
+    Object.keys(LANGUAGES).map((language) => [
+      language,
+      displayName(localText(stop, "name", language) ?? ""),
+    ]),
+  );
 }
 
 const stopNames = new Map();
+const NO_NAMES = {};
 
 // Names come from the operator, so the config holds no copy that can go out of date.
-// A failed lookup gives "" and is tried again next time: arrivals matter more than the name.
-function loadStopName(stop, fetchFn) {
+// A failed lookup gives no names and is tried again next time: arrivals matter more.
+function loadStopNames(stop, fetchFn) {
   const key = `${stop.operator}:${stop.stop_id}`;
   if (!stopNames.has(key)) {
-    const name = fetchStopName(stop, fetchFn).catch((error) => {
+    const names = fetchStopNames(stop, fetchFn).catch((error) => {
       console.error("buseta:", error);
       stopNames.delete(key);
-      return "";
+      return NO_NAMES;
     });
-    stopNames.set(key, name);
+    stopNames.set(key, names);
   }
   return stopNames.get(key);
 }
 
-export const withNames = (stops, fetchFn = fetch) =>
-  Promise.all(stops.map(async (stop) => ({ ...stop, name: await loadStopName(stop, fetchFn) })));
+// `name` is for display. `groupName` is the Traditional Chinese name the board groups by.
+const named = (stop, names, language) => ({
+  ...stop,
+  name: names[language] || names.tc || "",
+  groupName: names.tc ?? "",
+});
+
+export const withNames = (stops, { fetchFn = fetch, language = DEFAULT_LANGUAGE } = {}) =>
+  Promise.all(
+    stops.map(async (stop) => named(stop, await loadStopNames(stop, fetchFn), language)),
+  );
 
 export function stopUrls(stop) {
   return stop.operator === "kmb"
@@ -292,11 +317,11 @@ export async function fetchRows(
   config,
   { fetchFn = fetch, now = () => new Date(), memory = new Map() } = {},
 ) {
-  const named = Promise.all(
-    config.stops.map(async (stop) => ({
-      ...stop,
-      name: await withinTime(loadStopName(stop, fetchFn), NAME_WAIT_MS, ""),
-    })),
+  const language = config.language ?? DEFAULT_LANGUAGE;
+  const naming = Promise.all(
+    config.stops.map(async (stop) =>
+      named(stop, await withinTime(loadStopNames(stop, fetchFn), NAME_WAIT_MS, NO_NAMES), language),
+    ),
   );
   const requests = config.stops.flatMap((stop, index) =>
     stopUrls(stop).map((url) => ({ index, url })),
@@ -311,12 +336,12 @@ export async function fetchRows(
       return { index, records: memory.get(url) ?? [], error };
     }
   });
-  const stops = await named;
+  const stops = await naming;
   const current = now();
   const rows = results.flatMap(({ index, records }) =>
     records
       .filter((raw) => servesStop(raw, stops[index]))
-      .map((raw) => toRow(raw, stops[index], current))
+      .map((raw) => toRow(raw, stops[index], current, language))
       .filter(Boolean),
   );
   const failures = results

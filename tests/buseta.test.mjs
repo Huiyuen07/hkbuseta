@@ -14,6 +14,7 @@ import {
   toRow,
   validateConfig,
 } from "../dist/buseta.js";
+import { languageFromTag, resolveLanguage } from "../dist/buseta-i18n.js";
 
 const NOW = new Date("2026-01-01T12:00:00+08:00");
 const inMinutes = (minutes) => new Date(NOW.getTime() + minutes * 60000).toISOString();
@@ -464,7 +465,7 @@ test("a lane lists each remark once and leaves out the scheduled mark", () => {
     bus({ remainingMinutes: 6, remark: "只限星期一" }),
     bus({ remainingMinutes: 9, remark: "只限星期一" }),
     bus({ remainingMinutes: 12, remark: "特別班次" }),
-    bus({ remainingMinutes: 15, remark: "原定班次" }),
+    bus({ remainingMinutes: 15, remark: "Scheduled Bus", scheduled: true }),
     bus({ remainingMinutes: 18, remark: "" }),
   ];
   assert.deepEqual(group(rows)[0].lanes[0].notes, ["只限星期一", "特別班次"]);
@@ -718,4 +719,90 @@ test("an answer with no data counts as a failure, not as no buses", async () => 
   const config = validateConfig({ stops: [{ operator: "kmb", stop_id: "OK1" }] });
   const { failures } = await fetchRows(config, { fetchFn, now: () => NOW });
   assert.equal(failures.length, 1);
+});
+
+// Languages
+
+test("validateConfig defaults to Traditional Chinese and rejects other languages", () => {
+  assert.equal(validateConfig({ stops: [] }).language, "tc");
+  assert.equal(validateConfig({ stops: [], language: "en" }).language, "en");
+  assert.throws(() => validateConfig({ stops: [], language: "fr" }), /language/);
+});
+
+test("toRow shows text in the chosen language but keys rules and scheduling on Chinese", () => {
+  const raw = {
+    route: "1",
+    dir: "O",
+    dest_tc: "東站",
+    dest_en: "EAST",
+    rmk_tc: "原定班次",
+    rmk_en: "Scheduled Bus",
+    eta: inMinutes(5),
+  };
+  const row = toRow(raw, KMB_STOP, NOW, "en");
+  assert.equal(row.destination, "東站");
+  assert.equal(row.destinationName, "EAST");
+  assert.equal(row.remark, "Scheduled Bus");
+  assert.equal(row.scheduled, true);
+});
+
+test("toRow falls back to Traditional Chinese when a language is missing", () => {
+  const raw = { route: "1", dest_tc: "東站", rmk_tc: "特別班次", eta: inMinutes(5) };
+  const row = toRow(raw, KMB_STOP, NOW, "sc");
+  assert.equal(row.destinationName, "東站");
+  assert.equal(row.remark, "特別班次");
+});
+
+test("an English board names stops in English and still joins one stop across operators", async () => {
+  const { fetchFn } = fakeFetch({
+    "https://data.etabus.gov.hk/v1/transport/kmb/stop/KMB-EN": { name_tc: "碼頭", name_en: "PIER (AB123)" },
+    "https://rt.data.gov.hk/v2/transport/citybus/stop/CTB-EN": { name_tc: "碼頭", name_en: "Pier" },
+    "https://data.etabus.gov.hk/v1/transport/kmb/stop-eta/KMB-EN/": [
+      { route: "K1", dir: "O", dest_tc: "九龍", dest_en: "KOWLOON", eta: inMinutes(9) },
+    ],
+    "https://rt.data.gov.hk/v2/transport/citybus/eta/ctb/CTB-EN/1": [
+      { route: "1", dir: "I", dest_tc: "東", dest_en: "East", eta: inMinutes(3) },
+    ],
+    "https://rt.data.gov.hk/v2/transport/citybus/eta/ctb/CTB-EN/2": [],
+  });
+  // Stop names are cached for the module, so these stops are used by no other test.
+  const stops = [
+    { ...KMB_STOP, stop_id: "KMB-EN" },
+    { ...CTB_STOP, stop_id: "CTB-EN" },
+  ];
+  const config = validateConfig({ stops, language: "en" });
+  const { rows } = await fetchRows(config, { fetchFn, now: () => NOW });
+  const groups = groupRows(rows, config);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].name, "PIER");
+  assert.deepEqual(groups[0].lanes.map(({ destination }) => destination), ["East", "KOWLOON"]);
+});
+
+test("validateConfig accepts following HA's language", () => {
+  assert.equal(validateConfig({ stops: [], language: "auto" }).language, "auto");
+});
+
+test("HA's language tags map to the three languages, with English for the rest", () => {
+  const cases = {
+    "zh-Hant": "tc",
+    "zh-HK": "tc",
+    "zh-TW": "tc",
+    zh: "tc",
+    "zh-Hans": "sc",
+    "zh-CN": "sc",
+    en: "en",
+    "en-GB": "en",
+    ja: "en",
+    "": "tc",
+    undefined: "tc",
+  };
+  for (const [tag, language] of Object.entries(cases)) {
+    assert.equal(languageFromTag(tag === "undefined" ? undefined : tag), language, tag);
+  }
+});
+
+test("a fixed language is kept, and auto reads HA's locale before its older language field", () => {
+  assert.equal(resolveLanguage("sc", { locale: { language: "en" } }), "sc");
+  assert.equal(resolveLanguage("auto", { locale: { language: "en" }, language: "zh-Hans" }), "en");
+  assert.equal(resolveLanguage("auto", { language: "zh-Hans" }), "sc");
 });

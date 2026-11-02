@@ -282,22 +282,24 @@ test("live records become one option per route and destination, sorted by route"
     { route: "68K", dir: "O", dest_tc: "Z", eta: null },
   ];
   assert.deepEqual(stopOptions(KMB, records), [
-    { route: "68K", dir: "O", destination: "Z" },
-    { route: "238", dir: "O", destination: "X" },
-    { route: "238", dir: "O", destination: "Y" },
+    { route: "68K", dir: "O", destination: "Z", name: "Z" },
+    { route: "238", dir: "O", destination: "X", name: "X" },
+    { route: "238", dir: "O", destination: "Y", name: "Y" },
   ]);
 });
 
 test("an option remembers the KMB service_type it came from", () => {
   const records = [{ route: "238", dir: "O", service_type: 2, dest_tc: "X", eta: "t1" }];
   assert.deepEqual(stopOptions(KMB, records), [
-    { route: "238", dir: "O", destination: "X", service_type: 2 },
+    { route: "238", dir: "O", destination: "X", name: "X", service_type: 2 },
   ]);
 });
 
 test("a hidden option stays listed when the API has no data for it", () => {
   const exclude = [{ stop_id: "K1", route: 238, destination: "Y" }];
-  assert.deepEqual(stopOptions(KMB, [], exclude), [{ route: "238", dir: undefined, destination: "Y" }]);
+  assert.deepEqual(stopOptions(KMB, [], exclude), [
+    { route: "238", dir: undefined, destination: "Y", name: "Y" },
+  ]);
 });
 
 test("a hidden option at another stop is not listed", () => {
@@ -517,4 +519,68 @@ test("config helpers leave the original config untouched", () => {
     removeRoute(config, 0, 0);
     setHidden(config, CTB, OPTION, true);
   });
+});
+
+// Languages: labels follow the chosen language, rules keep matching Traditional Chinese.
+
+const WORDS = { dest_tc: "東站", dest_sc: "东站", dest_en: "East" };
+
+test("Citybus directions are labelled in the chosen language", async () => {
+  const fetchFn = fakeFetch({
+    [`${CTB_API}/route/ctb/42`]: {
+      route: "42",
+      orig_tc: "西站",
+      orig_en: "West",
+      dest_tc: "東站",
+      dest_en: "East",
+    },
+    [`${CTB_API}/route-stop/ctb/42/outbound`]: seqStops("S1"),
+    [`${CTB_API}/route-stop/ctb/42/inbound`]: seqStops("S2"),
+  });
+  const { directions } = await loadRoute("ctb", "42", { fetchFn, language: "en" });
+  assert.deepEqual(directions.map(({ label }) => label), ["To East", "To West"]);
+});
+
+test("KMB directions to one place say where they start in the chosen language", async () => {
+  const route = (bound, orig) => ({
+    ...kmbRoute("1", bound, "1", orig.tc, "東站"),
+    orig_en: orig.en,
+    dest_en: "EAST",
+  });
+  const { loadRoute: load } = await freshConfig();
+  const fetchFn = fakeFetch({
+    [`${KMB_API}/route/`]: [route("O", { tc: "甲", en: "A" }), route("I", { tc: "乙", en: "B" })],
+    [`${KMB_API}/route-stop/1/outbound/1`]: seqStops("A"),
+    [`${KMB_API}/route-stop/1/inbound/1`]: seqStops("B"),
+  });
+  const { directions } = await load("kmb", "1", { fetchFn, language: "en" });
+  assert.deepEqual(directions.map(({ label }) => label), [
+    "To EAST (from A)",
+    "To EAST (from B)",
+  ]);
+});
+
+test("route stops are named in the chosen language, falling back to Traditional Chinese", async () => {
+  const fetchFn = fakeFetch({
+    [`${CTB_API}/stop/S1`]: { name_tc: "甲", name_sc: "甲简", lat: "22.3", long: "114.1" },
+    [`${CTB_API}/stop/S2`]: { name_tc: "乙", lat: "22.3", long: "114.1" },
+  });
+  const stops = await loadRouteStops("ctb", ["S1", "S2"], { fetchFn, language: "sc" });
+  assert.deepEqual(stops.map(({ name }) => name), ["甲简", "乙"]);
+});
+
+test("an option shows its destination in the chosen language and hides by Traditional Chinese", () => {
+  const records = [{ route: "1", dir: "O", ...WORDS, eta: "t1" }];
+  const [option] = stopOptions(KMB, records, [], "en");
+  assert.equal(option.name, "East");
+  assert.equal(option.destination, "東站");
+  const config = setHidden({ stops: [KMB], exclude: [] }, KMB, option, true);
+  assert.equal(config.exclude[0].destination, "東站");
+});
+
+test("words the editor adds itself follow the chosen language", () => {
+  assert.equal(routeLabel("42", "en"), "42 All directions");
+  assert.equal(routeLabel("42", "sc"), "42 全部方向");
+  const [{ rows }] = addedRoutes([{ ...KMB, name: "Stop A" }], "en");
+  assert.equal(rows[0].route, "All routes");
 });

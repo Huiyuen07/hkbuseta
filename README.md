@@ -23,7 +23,7 @@ HACS 會自動加入資源，版本更新也在 HACS 完成。如果資源是用
 
 #### 方法二：手動下載
 
-1. 下載[最新版本](https://github.com/Huiyuen07/hkbuseta/releases/latest)，把 `dist/` 內的四個 `.js` 檔複製到 `/config/www/buseta/`。有 SSH 的話，可以改為在 repo 內執行 `./deploy.sh <ssh-host>`，指令最後會印出資源網址。
+1. 下載[最新版本](https://github.com/Huiyuen07/hkbuseta/releases/latest)，把 `dist/` 內的五個 `.js` 檔複製到 `/config/www/buseta/`。有 SSH 的話，可以改為在 repo 內執行 `./deploy.sh <ssh-host>`，指令最後會印出資源網址。
 2. 加入資源：到「設定 → 儀表板 → 右上角選單 → 資源」新增 `/local/buseta/buseta-card.js`，類型選「JavaScript 模組」。
 
 更新版本後，要在資源網址加上或更改 `?v=`（`deploy.sh` 會印出新值），瀏覽器才會載入新版。
@@ -43,6 +43,7 @@ HACS 會自動加入資源，版本更新也在 HACS 完成。如果資源是用
 | `max_minutes` | 只顯示此分鐘數內到站的班次，也是時間軸的長度，最少 `1` | `30` |
 | `leave_minutes` | 出門時間（分鐘），`0` 為關閉 | `5` |
 | `color_scheme` | 配色：`auto`、`mono`、`led`、`icehouse` | `auto` |
+| `language` | 語言：`auto`（跟隨 Home Assistant）、`tc`（繁體中文）、`sc`（簡體中文）、`en`（English） | `tc` |
 | `grid_options` | HA 的卡片大小設定：`columns`（欄）和 `rows`（行） | 全寬、8 行 |
 | `stops` | 要顯示的站點 | 必填 |
 | `exclude` | 要隱藏的班次規則 | `[]` |
@@ -65,6 +66,14 @@ HACS 會自動加入資源，版本更新也在 HACS 完成。如果資源是用
 | `label` | 編輯器顯示的方向文字，不影響卡片顯示的班次 |
 
 站名一律即時取自營運商，不存於設定，九巴站名後的站牌代碼（例如 `(WT916)`）不會顯示。
+
+### 語言
+
+`language` 決定卡片和編輯視窗的文字，以及站名、目的地和備註用營運商哪一種語言。九巴的英文全用大楷，卡片照原樣顯示。
+
+`auto` 跟隨每位用戶在 Home Assistant 個人設定中的語言，所以同一張卡片可以按用戶顯示不同語言。繁體中文和沒有標明字體的中文用 `tc`，簡體中文用 `sc`，其他語言一律用 English。
+
+排除規則仍比對繁體中文的目的地，所以轉換語言後規則照樣生效。方向文字（`label`）在加入路線時寫入設定，轉換語言後，已加入的路線仍顯示加入時的語言，重新加入即可更新。
 
 ### 重複班次
 
@@ -99,7 +108,7 @@ HACS adds the resource for you and handles updates. If you manage resources in Y
 
 #### Option 2: Manual download
 
-1. Download the [latest release](https://github.com/Huiyuen07/hkbuseta/releases/latest) and copy the four `.js` files in `dist/` to `/config/www/buseta/`. With SSH, you can instead run `./deploy.sh <ssh-host>` from the repo. The command ends by printing the resource URL.
+1. Download the [latest release](https://github.com/Huiyuen07/hkbuseta/releases/latest) and copy the five `.js` files in `dist/` to `/config/www/buseta/`. With SSH, you can instead run `./deploy.sh <ssh-host>` from the repo. The command ends by printing the resource URL.
 2. Add the resource: go to Settings → Dashboards → top-right menu → Resources, add `/local/buseta/buseta-card.js`, and choose JavaScript module.
 
 After an update, add or change `?v=` in the resource URL (`deploy.sh` prints the new value), so browsers load the new version.
@@ -119,6 +128,7 @@ To write YAML instead, select the text editor option at the bottom left of the d
 | `max_minutes` | Only show buses arriving within this many minutes, at least `1`. Also the length of the time axis | `30` |
 | `leave_minutes` | Leaving time in minutes. `0` turns it off | `5` |
 | `color_scheme` | Color scheme: `auto`, `mono`, `led` or `icehouse` | `auto` |
+| `language` | Language: `auto` (follow Home Assistant), `tc` (Traditional Chinese), `sc` (Simplified Chinese) or `en` (English) | `tc` |
 | `grid_options` | HA's card size: `columns` and `rows` | Full width, 8 rows |
 | `stops` | Stops to display | Required |
 | `exclude` | Rules for buses to hide | `[]` |
@@ -141,6 +151,14 @@ Each entry in `routes` is a route number or an object:
 | `label` | Direction text for the editor. It doesn't change which buses appear |
 
 Stop names always come live from the operator and aren't stored in the config. The stop code after a KMB name, such as `(WT916)`, isn't shown.
+
+### Language
+
+`language` sets the text of the card and its editor, and which of the operator's languages stop names, destinations and remarks use. KMB writes English in capitals, and the card shows it as given.
+
+`auto` follows each user's language in their Home Assistant profile, so one card can show different languages to different users. Traditional Chinese and Chinese with no script use `tc`, Simplified Chinese uses `sc`, and every other language gets English.
+
+Exclude rules still match the Traditional Chinese destination, so they keep working after a language change. Direction text (`label`) is saved when a route is added, so routes added earlier keep that language until you add them again.
 
 ### Duplicate departures
 

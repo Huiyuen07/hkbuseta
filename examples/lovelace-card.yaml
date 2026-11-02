@@ -7,6 +7,8 @@ max_minutes: 30
 leave_minutes: 5
 # auto、mono、led、icehouse
 color_scheme: auto
+# auto（跟隨 HA / follow HA）、tc（繁體）、sc（简体）、en
+language: tc
 grid_options:
   columns: full
   rows: 8

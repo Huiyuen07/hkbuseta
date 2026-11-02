@@ -16,7 +16,7 @@ HOST="${1:?Usage: ./deploy.sh <ssh-host-of-home-assistant> [dest-dir]}"
 DEST="${2:-/config/www/buseta}"
 SRC="$(cd "$(dirname "$0")" && pwd)/dist"
 
-FILES=(buseta.js buseta-card.js buseta-config.js buseta-editor.js)
+FILES=(buseta.js buseta-card.js buseta-config.js buseta-editor.js buseta-i18n.js)
 VERSION="$(cd "$SRC" && cat "${FILES[@]}" | sha256sum | cut -c1-8)"
 
 echo ">> 部署到 ${HOST}:${DEST}"

@@ -210,9 +210,8 @@ test("the editor shows the default colours and a full width when none are saved"
 
 test("the editor offers exactly the four colour schemes", async () => {
   const editor = await editorWith();
-  const offered = [...editor.shadowRoot.innerHTML.matchAll(/<option value="(auto|mono|led|icehouse|[a-z]+)"/g)]
-    .map((match) => match[1])
-    .filter((id) => !["kmb", "ctb"].includes(id));
+  const [schemes] = editor.shadowRoot.innerHTML.match(/data-action="scheme">[^]*?<\/select>/);
+  const offered = [...schemes.matchAll(/<option value="([a-z]+)"/g)].map((match) => match[1]);
   assert.deepEqual(offered, ["auto", "mono", "led", "icehouse"]);
 });
 
@@ -605,4 +604,94 @@ test("every failed request is logged", async () => {
   assert.equal(logged.mock.callCount(), 1);
   logged.mock.restore();
   card.disconnectedCallback();
+});
+
+test("an English card labels the axis and footer in English and shows English destinations", async () => {
+  respondWith([k1(8, { dest_en: "KOWLOON" })]);
+  const card = await showCard({ language: "en" });
+  assert.match(card.shadowRoot.innerHTML, /<ha-card class="scheme-auto" lang="en"/);
+  assert.match(body(card), />Now</);
+  assert.match(body(card), /KOWLOON/);
+  assert.match(foot(card), /Scheduled/);
+  assert.match(foot(card), /May miss within 5 min/);
+  assert.match(foot(card), /Updated \d\d:\d\d/);
+  card.disconnectedCallback();
+});
+
+test("a Simplified Chinese card asks for stops in Simplified Chinese", async () => {
+  const card = new BusetaCard();
+  card.setConfig({ stops: [], language: "sc" });
+  card.connectedCallback();
+  assert.match(body(card), /请在卡片设置中添加站点/);
+  assert.match(card.shadowRoot.innerHTML, /lang="zh-CN"/);
+});
+
+test("the editor saves the language and redraws itself in it", async () => {
+  const editor = await editorWith();
+  assert.match(editor.shadowRoot.innerHTML, /基本設定/);
+  assert.equal(change(editor, "language", "en").language, "en");
+  assert.match(editor.shadowRoot.innerHTML, /Basics/);
+  assert.doesNotMatch(editor.shadowRoot.innerHTML, /基本設定/);
+});
+
+test("an editor opened on an English card is in English", async () => {
+  const editor = await editorWith({ language: "en" });
+  editor.connectedCallback();
+  assert.match(editor.shadowRoot.innerHTML, /Add a route/);
+  assert.equal(editor.shadowRoot.querySelector("[data-action=language]").value, "en");
+});
+
+test("a card following HA shows the user's language and redraws when it changes", async () => {
+  respondWith([k1(8, { dest_en: "KOWLOON", dest_sc: "九龙" })]);
+  const card = new BusetaCard();
+  card.setConfig({ stops: [STOP], language: "auto" });
+  card.hass = { locale: { language: "en" } };
+  card.connectedCallback();
+  await settle();
+  assert.match(body(card), /KOWLOON/);
+  assert.match(card.shadowRoot.innerHTML, /lang="en"/);
+  card.hass = { locale: { language: "zh-Hans" } };
+  await settle();
+  assert.match(body(card), /九龙/);
+  assert.match(foot(card), /原定班次/);
+  card.disconnectedCallback();
+});
+
+test("new hass with the same language leaves a card following HA alone", async () => {
+  respondWith([k1(8)]);
+  const card = new BusetaCard();
+  card.setConfig({ stops: [STOP], language: "auto" });
+  card.hass = { locale: { language: "en" } };
+  card.connectedCallback();
+  await settle();
+  const before = requests;
+  card.hass = { locale: { language: "en" }, states: {} };
+  await settle();
+  assert.equal(requests, before);
+  card.disconnectedCallback();
+});
+
+test("a card with a fixed language ignores HA's language", async () => {
+  const card = new BusetaCard();
+  card.setConfig({ stops: [], language: "tc" });
+  card.hass = { locale: { language: "en" } };
+  card.connectedCallback();
+  assert.match(body(card), /加入站點/);
+});
+
+test("an editor following HA is in HA's language and keeps the choice as auto", async () => {
+  const editor = await editorWith({ language: "auto" });
+  editor.hass = { locale: { language: "en" } };
+  editor.connectedCallback();
+  assert.match(editor.shadowRoot.innerHTML, /Follow Home Assistant/);
+  assert.match(editor.shadowRoot.innerHTML, /Add a route/);
+  assert.equal(editor.shadowRoot.querySelector("[data-action=language]").value, "auto");
+});
+
+test("choosing to follow HA in the editor saves auto and switches to HA's language", async () => {
+  const editor = await editorWith();
+  editor.hass = { locale: { language: "zh-Hans" } };
+  assert.match(editor.shadowRoot.innerHTML, /基本設定/);
+  assert.equal(change(editor, "language", "auto").language, "auto");
+  assert.match(editor.shadowRoot.innerHTML, /基本设置/);
 });

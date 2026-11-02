@@ -4,6 +4,7 @@
 const version = new URL(import.meta.url).search;
 const { axisTicks, escapeHtml, fetchRows, groupRows, staggerDepartures, validateConfig } =
   await import(`./buseta.js${version}`);
+const { LANGUAGES, resolveLanguage, strings } = await import(`./buseta-i18n.js${version}`);
 
 // These sizes also decide when dots need moving off the rail, so the styles use them too.
 const LABEL_WIDTH = 130;
@@ -199,10 +200,7 @@ const STYLE = `
 `;
 
 const messageHtml = (text) => `<div class="message">${text}</div>`;
-const NO_STOPS = messageHtml("請在卡片設定加入站點 / Add stops in the card settings");
-const LOADING = messageHtml("載入中…");
-const FAILED = messageHtml("無法取得班次，稍後會自動重試");
-const NO_BUSES = messageHtml("暫無班次");
+const text = (config) => strings(config.language);
 
 const share = (minutes, config) => (Math.min(minutes, config.max_minutes) / config.max_minutes) * 100;
 
@@ -258,6 +256,7 @@ const tickHtml = (minutes, config, kind = "") =>
   `<span class="tick ${kind}" style="left:${share(minutes, config)}%">${minutes}</span>`;
 
 function axisHtml(config) {
+  const { now } = text(config);
   const { leave_minutes: leave, max_minutes: max } = config;
   const ticks = axisTicks(max);
   // A label of its own only where it won't sit on top of 現在 or a round minute.
@@ -266,7 +265,7 @@ function axisHtml(config) {
     <div class="axis">
       <span></span>
       <div class="scale">
-        <span class="tick now" style="left:0">現在</span>
+        <span class="tick now" style="left:0">${now}</span>
         ${clear ? tickHtml(leave, config, "leave") : ""}
         ${ticks.map((tick) => tickHtml(tick, config)).join("")}
       </div>
@@ -279,24 +278,32 @@ const chartHtml = (groups, config, gap) =>
 const clock = (date) =>
   date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 
-function failureHtml({ failures, allFailed }) {
+function failureHtml({ failures, allFailed }, config) {
+  const t = text(config);
   if (failures.length === 0) return "";
-  if (allFailed) return "更新失敗";
-  const names = new Set(failures.map(({ stop }) => stop || "部分站點"));
-  return `${escapeHtml([...names].join("、"))} 更新失敗`;
+  if (allFailed) return t.updateFailed;
+  const names = new Set(failures.map(({ stop }) => stop || t.someStops));
+  return escapeHtml(t.stopsFailed([...names].join(t.listSeparator)));
 }
 
-function footHtml({ leave_minutes: leave }, updated, problem) {
-  const area = leave ? `<span class="key"><span class="chip area"></span>${leave} 分鐘內未必趕到</span>` : "";
+function footHtml(config, updated, problem) {
+  const t = text(config);
+  const leave = config.leave_minutes;
+  const area = leave
+    ? `<span class="key"><span class="chip area"></span>${escapeHtml(t.mayMiss(leave))}</span>`
+    : "";
   const status = [
-    ...(updated ? [`更新於 ${clock(updated)}`] : []),
+    ...(updated ? [t.updated(clock(updated))] : []),
     ...(problem ? [problem] : []),
-  ].join("，");
-  return `${area}<span class="key"><span class="chip scheduled"></span>原定班次</span>
+  ].join(t.statusSeparator);
+  return `${area}<span class="key"><span class="chip scheduled"></span>${t.scheduled}</span>
     <span class="updated">${status}</span>`;
 }
 
 class BusetaCard extends HTMLElement {
+  // #saved is the config as written. #config is the one in use, with `language` resolved.
+  #saved;
+  #hass;
   #config;
   #chart;
   #foot;
@@ -321,13 +328,31 @@ class BusetaCard extends HTMLElement {
   }
 
   setConfig(config) {
-    this.#config = validateConfig(config);
+    this.#saved = validateConfig(config);
+    this.#apply();
+  }
+
+  // HA sets this on every state change, so only a new language redraws the card.
+  set hass(hass) {
+    this.#hass = hass;
+    if (this.#saved && this.#language !== this.#config.language) this.#apply();
+  }
+
+  get #language() {
+    return resolveLanguage(this.#saved.language, this.#hass);
+  }
+
+  #apply() {
+    const config = this.#saved;
+    this.#config = { ...config, language: this.#language };
     this.#updated = undefined;
     const root = this.shadowRoot ?? this.attachShadow({ mode: "open" });
     const header = config.title ? ` header="${escapeHtml(config.title)}"` : "";
+    // `lang` lets the browser pick Traditional or Simplified Chinese glyphs.
+    const { tag } = LANGUAGES[this.#config.language];
     root.innerHTML = `
       <style>${STYLE}</style>
-      <ha-card class="scheme-${this.#config.color_scheme}"${header}>
+      <ha-card class="scheme-${this.#config.color_scheme}" lang="${tag}"${header}>
         <div class="scroll"><div class="chart"></div></div>
         <div class="foot"></div>
       </ha-card>`;
@@ -359,10 +384,10 @@ class BusetaCard extends HTMLElement {
   #start() {
     this.#stop();
     if (this.#config.stops.length === 0) {
-      this.#chart.innerHTML = NO_STOPS;
+      this.#chart.innerHTML = messageHtml(text(this.#config).noStops);
       return;
     }
-    this.#chart.innerHTML = LOADING;
+    this.#chart.innerHTML = messageHtml(text(this.#config).loading);
     this.#poll();
   }
 
@@ -382,15 +407,17 @@ class BusetaCard extends HTMLElement {
     const config = this.#config;
     const groups = groupRows(result.rows, config);
     const gap = dotGap(this.#chart.clientWidth, config);
-    const empty = result.allFailed ? FAILED : NO_BUSES;
+    const t = text(config);
+    const empty = messageHtml(result.allFailed ? t.failed : t.noBuses);
     this.#chart.innerHTML = groups.length ? chartHtml(groups, config, gap) : empty;
     if (!result.allFailed) this.#updated = new Date();
-    this.#foot.innerHTML = footHtml(config, this.#updated, failureHtml(result));
+    this.#foot.innerHTML = footHtml(config, this.#updated, failureHtml(result, config));
   }
 
   #showFailure() {
-    if (!this.#updated) this.#chart.innerHTML = FAILED;
-    this.#foot.innerHTML = footHtml(this.#config, this.#updated, "更新失敗");
+    const t = text(this.#config);
+    if (!this.#updated) this.#chart.innerHTML = messageHtml(t.failed);
+    this.#foot.innerHTML = footHtml(this.#config, this.#updated, t.updateFailed);
   }
 
   async #refresh() {

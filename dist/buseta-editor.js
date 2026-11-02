@@ -4,6 +4,7 @@
 const version = new URL(import.meta.url).search;
 const { COLOR_SCHEMES, DEFAULTS, MIN_REFRESH_SECONDS, OPERATORS, escapeHtml, withNames } =
   await import(`./buseta.js${version}`);
+const { AUTO, LANGUAGES, resolveLanguage, strings } = await import(`./buseta-i18n.js${version}`);
 const {
   addStop,
   addedRoutes,
@@ -64,51 +65,67 @@ const STYLE = `
   .added { color: var(--primary-color); font-size: 0.9em; }
 `;
 
-const TEMPLATE = `
+const optionsHtml = (names) =>
+  Object.entries(names)
+    .map(([id, name]) => `<option value="${id}">${escapeHtml(name)}</option>`)
+    .join("");
+
+// Each language's own name, so the choice reads right whatever the editor is set to.
+const LANGUAGE_NAMES = Object.fromEntries(
+  Object.entries(LANGUAGES).map(([id, { name }]) => [id, name]),
+);
+
+const template = (t) => `
   <style>${STYLE}</style>
   <section>
-    <h3>基本設定</h3>
-    <label><span>標題</span><input data-action="title"></label>
+    <h3>${t.basics}</h3>
     <div class="numbers">
-      <label><span>更新間隔（秒，最少 ${MIN_REFRESH_SECONDS}）</span>
-        <input data-action="refresh" type="number" min="${MIN_REFRESH_SECONDS}" placeholder="${DEFAULTS.refresh_seconds}"></label>
-      <label><span>顯示多少分鐘內的班次</span>
-        <input data-action="max" type="number" min="1" placeholder="${DEFAULTS.max_minutes}"></label>
-    </div>
-    <div class="numbers">
-      <label><span>出門時間（分鐘，0 為關閉）</span>
-        <input data-action="leave" type="number" min="0" placeholder="${DEFAULTS.leave_minutes}"></label>
-      <label><span>配色</span>
-        <select data-action="scheme">
-          ${Object.entries(COLOR_SCHEMES).map(([id, name]) => `<option value="${id}">${name}</option>`).join("")}
+      <label><span>${t.title}</span><input data-action="title"></label>
+      <label><span>${t.language}</span>
+        <select data-action="language">
+          ${optionsHtml({ [AUTO]: t.followHa, ...LANGUAGE_NAMES })}
         </select></label>
     </div>
     <div class="numbers">
-      <label><span>卡片寬度（欄，留空為全寬）</span>
-        <input data-action="width" type="number" min="${MIN_COLUMNS}" placeholder="全寬"></label>
-      <label><span>卡片高度（行，最少 ${MIN_ROWS}）</span>
+      <label><span>${t.refresh(MIN_REFRESH_SECONDS)}</span>
+        <input data-action="refresh" type="number" min="${MIN_REFRESH_SECONDS}" placeholder="${DEFAULTS.refresh_seconds}"></label>
+      <label><span>${t.maxMinutes}</span>
+        <input data-action="max" type="number" min="1" placeholder="${DEFAULTS.max_minutes}"></label>
+    </div>
+    <div class="numbers">
+      <label><span>${t.leave}</span>
+        <input data-action="leave" type="number" min="0" placeholder="${DEFAULTS.leave_minutes}"></label>
+      <label><span>${t.scheme}</span>
+        <select data-action="scheme">
+          ${optionsHtml(Object.fromEntries(COLOR_SCHEMES.map((id) => [id, t.schemes[id]])))}
+        </select></label>
+    </div>
+    <div class="numbers">
+      <label><span>${t.width}</span>
+        <input data-action="width" type="number" min="${MIN_COLUMNS}" placeholder="${t.fullWidth}"></label>
+      <label><span>${t.height(MIN_ROWS)}</span>
         <input data-action="height" type="number" min="${MIN_ROWS}" placeholder="${DEFAULT_ROWS}"></label>
     </div>
-    <div class="hint">每個區段 12 欄，每行約 64 像素。只在「區段」版面的 dashboard 生效。</div>
+    <div class="hint">${t.sizeHint}</div>
   </section>
   <section>
-    <h3>已加入的站點</h3>
+    <h3>${t.addedStops}</h3>
     <div id="stops"></div>
   </section>
   <section>
-    <h3>加入路線</h3>
-    <label><span>營運商</span>
+    <h3>${t.addRoute}</h3>
+    <label><span>${t.operator}</span>
       <select data-action="operator">
-        ${Object.entries(OPERATORS).map(([id, name]) => `<option value="${id}">${name}</option>`).join("")}
+        ${optionsHtml(Object.fromEntries(OPERATORS.map((id) => [id, t.operators[id]])))}
       </select></label>
     <div id="add"></div>
   </section>
 `;
 
 const stopKey = (stop) => `${stop.operator}:${stop.stop_id}`;
-const formatDistance = (metres) =>
-  metres < 1000 ? `${metres} 米` : `${(metres / 1000).toFixed(1)} 公里`;
-const optionLabel = (option) => `${option.route} → ${option.destination}`;
+const formatDistance = (metres, t) =>
+  metres < 1000 ? t.metres(metres) : t.kilometres((metres / 1000).toFixed(1));
+const optionLabel = (option) => `${option.route} → ${option.name ?? option.destination}`;
 // Only a stop still showing whole routes has anything left to hide.
 const canHide = (stop) => !stop.routes || stop.routes.some((entry) => entry.dir === undefined);
 
@@ -120,11 +137,13 @@ class BusetaCardEditor extends HTMLElement {
   #operator = "kmb";
   #search = { input: "" };
   #added = "";
+  #language;
 
   constructor() {
     super();
     const root = this.attachShadow({ mode: "open" });
-    root.innerHTML = TEMPLATE;
+    this.#language = this.#chosenLanguage;
+    root.innerHTML = template(this.#text);
     root.addEventListener("click", (event) => this.#onClick(event));
     root.addEventListener("change", (event) => this.#onChange(event));
     root.addEventListener("input", (event) => this.#onInput(event));
@@ -134,6 +153,7 @@ class BusetaCardEditor extends HTMLElement {
   set hass(hass) {
     const firstTime = !this.#hass;
     this.#hass = hass;
+    if (this.#chosenLanguage !== this.#language) return this.#changeLanguage();
     if (firstTime && this.#search.stops) this.#renderAdd();
   }
 
@@ -141,8 +161,38 @@ class BusetaCardEditor extends HTMLElement {
     const next = { ...config, stops: config.stops ?? [], exclude: config.exclude ?? [] };
     if (JSON.stringify(next) === JSON.stringify(this.#config)) return;
     this.#config = next;
+    if (this.#chosenLanguage !== this.#language) return this.#changeLanguage();
     this.#renderSettings();
     this.#renderStops();
+    this.#loadNames();
+  }
+
+  // The saved choice, which may be `auto`, and the language it gives.
+  get #languageChoice() {
+    return this.#config.language ?? DEFAULTS.language;
+  }
+
+  get #chosenLanguage() {
+    return resolveLanguage(this.#languageChoice, this.#hass);
+  }
+
+  get #text() {
+    return strings(this.#language);
+  }
+
+  // Everything already on screen is in the old language: route and stop lists are looked up
+  // again when next opened, while the route typed so far stays.
+  #changeLanguage() {
+    this.#language = this.#chosenLanguage;
+    this.#search = { input: this.#search.input };
+    this.#options.clear();
+    this.#names.clear();
+    this.#added = "";
+    this.shadowRoot.innerHTML = template(this.#text);
+    this.#find("[data-action=operator]").value = this.#operator;
+    this.#renderSettings();
+    this.#renderStops();
+    this.#renderAdd();
     this.#loadNames();
   }
 
@@ -153,6 +203,7 @@ class BusetaCardEditor extends HTMLElement {
   }
 
   get #namedStops() {
+    // #names holds each stop's name in the language the editor is showing.
     return this.#config.stops.map((stop) => ({
       ...stop,
       name: this.#names.get(stopKey(stop)) ?? "",
@@ -161,7 +212,10 @@ class BusetaCardEditor extends HTMLElement {
 
   async #loadNames() {
     const { stops } = this.#config;
-    for (const stop of await withNames(stops)) this.#names.set(stopKey(stop), stop.name);
+    const language = this.#language;
+    const named = await withNames(stops, { language });
+    if (language !== this.#language) return;
+    for (const stop of named) this.#names.set(stopKey(stop), stop.name);
     if (stops === this.#config.stops) this.#renderStops();
   }
 
@@ -210,6 +264,7 @@ class BusetaCardEditor extends HTMLElement {
   #renderSettings() {
     const { columns, rows } = this.#config.grid_options ?? {};
     this.#find("[data-action=title]").value = this.#config.title ?? "";
+    this.#find("[data-action=language]").value = this.#languageChoice;
     this.#find("[data-action=leave]").value = this.#config.leave_minutes ?? "";
     this.#find("[data-action=scheme]").value = this.#config.color_scheme ?? DEFAULTS.color_scheme;
     this.#find("[data-action=width]").value = typeof columns === "number" ? columns : "";
@@ -219,19 +274,18 @@ class BusetaCardEditor extends HTMLElement {
   }
 
   #optionsHtml(stop) {
+    const t = this.#text;
     const options = this.#options.get(stopKey(stop));
     if (options === undefined) return "";
-    if (options === "loading") return `<div class="options hint">載入班次中…</div>`;
+    if (options === "loading") return `<div class="options hint">${t.loadingBuses}</div>`;
     if (options.error) return `<div class="options error">${escapeHtml(options.error)}</div>`;
-    if (options.length === 0) {
-      return `<div class="options hint">暫無班次資料。收車後部分路線不會列出，請稍後再試。</div>`;
-    }
+    if (options.length === 0) return `<div class="options hint">${t.noBusData}</div>`;
     const rows = options.map((option, index) => {
       const checked = isHidden(option, stop, this.#config.exclude) ? "" : " checked";
       return `<label><input type="checkbox" data-action="toggle" data-key="${escapeHtml(stopKey(stop))}"
         data-option="${index}"${checked}>${escapeHtml(optionLabel(option))}</label>`;
     });
-    return `<div class="options"><div class="hint">取消勾選即隱藏。同一班車有兩個目的地時，只會顯示一個。</div>${rows.join("")}</div>`;
+    return `<div class="options"><div class="hint">${t.untickToHide}</div>${rows.join("")}</div>`;
   }
 
   #rowHtml({ route, direction, stop, index, routeIndex }) {
@@ -243,14 +297,15 @@ class BusetaCardEditor extends HTMLElement {
       <span class="route">${escapeHtml(route)}</span>
       <span>${escapeHtml(direction)}</span>
       <span>${escapeHtml(stop)}</span>
-      <button type="button" ${remove} data-index="${index}" aria-label="移除" title="移除">×</button>`;
+      <button type="button" ${remove} data-index="${index}" aria-label="${this.#text.remove}"
+        title="${this.#text.remove}">×</button>`;
   }
 
   #showBusesHtml(stop, index) {
     if (!canHide(stop)) return "";
     return `
       <div class="show-buses">
-        <button type="button" data-action="options" data-index="${index}">${escapeHtml(stop.name)}：選擇顯示的班次</button>
+        <button type="button" data-action="options" data-index="${index}">${escapeHtml(this.#text.chooseBuses(stop.name))}</button>
         ${this.#optionsHtml(stop)}
       </div>`;
   }
@@ -260,29 +315,30 @@ class BusetaCardEditor extends HTMLElement {
       stop.operator === operator ? this.#showBusesHtml(stop, index) : "",
     );
     return `
-      <h4>${OPERATORS[operator]}</h4>
+      <h4>${this.#text.operators[operator]}</h4>
       <div class="routes">${rows.map((row) => this.#rowHtml(row)).join("")}</div>
       ${showBuses.join("")}`;
   }
 
   #renderStops() {
-    const groups = addedRoutes(this.#namedStops);
+    const groups = addedRoutes(this.#namedStops, this.#language);
     this.#find("#stops").innerHTML = groups.length
       ? groups.map((group) => this.#groupHtml(group)).join("")
-      : `<div class="hint">尚未加入站點，請在下方輸入路線。</div>`;
+      : `<div class="hint">${this.#text.noStopsYet}</div>`;
   }
 
   #renderAdd() {
+    const t = this.#text;
     const { input, loading, error, route } = this.#search;
     this.#find("#add").innerHTML = `
       <form class="route-form">
-        <input data-action="route" value="${escapeHtml(input)}" placeholder="路線，例如 1A" aria-label="路線">
-        <button type="submit">查詢</button>
+        <input data-action="route" value="${escapeHtml(input)}" placeholder="${t.routeExample}" aria-label="${t.route}">
+        <button type="submit">${t.search}</button>
       </form>
-      ${this.#added ? `<div class="added">已加入 ${escapeHtml(this.#added)}</div>` : ""}
+      ${this.#added ? `<div class="added">${escapeHtml(t.added(this.#added))}</div>` : ""}
       ${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}
       ${route ? this.#directionsHtml() : ""}
-      ${loading ? `<div class="hint">載入中…</div>` : ""}
+      ${loading ? `<div class="hint">${t.loading}</div>` : ""}
       ${this.#stopsHtml()}`;
   }
 
@@ -293,7 +349,7 @@ class BusetaCardEditor extends HTMLElement {
       ({ label }, index) => `<li><button type="button" data-action="pick-direction" data-index="${index}"
         ${index === direction ? `class="selected"` : ""}>${escapeHtml(label)}</button></li>`,
     );
-    return `<div class="hint">選擇方向</div><ul>${items.join("")}</ul>`;
+    return `<div class="hint">${this.#text.chooseDirection}</div><ul>${items.join("")}</ul>`;
   }
 
   #stopButton(stop, note) {
@@ -302,22 +358,21 @@ class BusetaCardEditor extends HTMLElement {
     const added = hasRoute(this.#config, { ...stop, operator: this.#operator, routes: [entry] });
     return `<button type="button" data-action="add-stop" data-id="${escapeHtml(stop.stop_id)}"
       data-name="${escapeHtml(stop.name)}"${added ? " disabled" : ""}><span>${escapeHtml(stop.name)}</span>
-      <small>${added ? "已加入" : note}</small></button>`;
+      <small>${escapeHtml(added ? this.#text.alreadyAdded : note)}</small></button>`;
   }
 
   #stopsHtml() {
+    const t = this.#text;
     const { route, direction, stops, missing } = this.#search;
     if (!stops) return "";
     const nearest = nearestStop(stops, this.#home);
     const nearestHtml = nearest
-      ? `<div class="nearest">${this.#stopButton(nearest, `離家最近 ${formatDistance(nearest.distance)}`)}</div>`
+      ? `<div class="nearest">${this.#stopButton(nearest, t.nearest(formatDistance(nearest.distance, t)))}</div>`
       : "";
-    const items = stops.map((stop) => `<li>${this.#stopButton(stop, "加入")}</li>`);
+    const items = stops.map((stop) => `<li>${this.#stopButton(stop, t.add)}</li>`);
     const { label } = route.directions[direction];
-    const missingHtml = missing
-      ? `<div class="error">有 ${missing} 個站牌未能載入，清單可能不完整，請稍後再查詢一次。</div>`
-      : "";
-    return `<div class="hint">按站牌加入路線 ${escapeHtml(route.route)} ${escapeHtml(label)}。</div>
+    const missingHtml = missing ? `<div class="error">${t.missingStops(missing)}</div>` : "";
+    return `<div class="hint">${escapeHtml(t.pickStop(route.route, label))}</div>
       ${missingHtml}${nearestHtml}<ul>${items.join("")}</ul>`;
   }
 
@@ -328,27 +383,30 @@ class BusetaCardEditor extends HTMLElement {
 
   async #findRoute() {
     const operator = this.#operator;
+    const language = this.#language;
+    const t = this.#text;
     const input = this.#search.input.trim().toUpperCase();
     const request = {};
     this.#search = { input: this.#search.input, request, loading: true };
     this.#added = "";
     this.#renderAdd();
     try {
-      const route = await loadRoute(operator, input);
+      const route = await loadRoute(operator, input, { language });
       if (this.#search.request !== request) return;
-      if (!route) return this.#searchFailed(`${OPERATORS[operator]}沒有路線 ${input}`);
+      if (!route) return this.#searchFailed(t.noSuchRoute(t.operators[operator], input));
       this.#search = { ...this.#search, route, loading: false };
       if (route.directions.length === 1) return this.#pickDirection(0);
       this.#renderAdd();
     } catch (error) {
       if (this.#search.request !== request) return;
       console.error("buseta:", error);
-      this.#searchFailed("無法載入路線，請稍後再試。");
+      this.#searchFailed(t.routeFailed);
     }
   }
 
   async #pickDirection(direction) {
     const operator = this.#operator;
+    const language = this.#language;
     const { route } = this.#search;
     this.#search = { ...this.#search, direction, stops: undefined, loading: true, error: "" };
     this.#added = "";
@@ -356,7 +414,7 @@ class BusetaCardEditor extends HTMLElement {
     const current = () => this.#search.route === route && this.#search.direction === direction;
     try {
       const { stopIds } = route.directions[direction];
-      const stops = await loadRouteStops(operator, stopIds);
+      const stops = await loadRouteStops(operator, stopIds, { language });
       if (!current()) return;
       const missing = stopIds.length - stops.length;
       this.#search = { ...this.#search, stops, missing, loading: false };
@@ -364,9 +422,7 @@ class BusetaCardEditor extends HTMLElement {
     } catch (error) {
       if (!current()) return;
       console.error("buseta:", error);
-      this.#searchFailed(
-        "暫時無法載入站牌，請稍後再查詢一次。也可以按編輯視窗左下角的「使用文字編輯器」，直接填入 stop_id。",
-      );
+      this.#searchFailed(this.#text.stopListFailed);
     }
   }
 
@@ -374,24 +430,29 @@ class BusetaCardEditor extends HTMLElement {
     const { route, direction } = this.#search;
     const entry = routeEntry(route.route, route.directions[direction], stop_id);
     const stop = { operator: this.#operator, stop_id, routes: [entry] };
-    this.#added = `${name} ${routeLabel(entry)}`;
+    this.#added = `${name} ${routeLabel(entry, this.#language)}`;
     this.#save(addStop(this.#config, stop), { render: true });
   }
 
   async #showOptions(stop) {
     const key = stopKey(stop);
+    const language = this.#language;
     if (this.#options.has(key) && this.#options.get(key) !== "loading") {
       this.#options.delete(key);
       return this.#renderStops();
     }
     this.#options.set(key, "loading");
     this.#renderStops();
+    let options;
     try {
-      this.#options.set(key, await loadStopOptions(stop, this.#config.exclude));
+      options = await loadStopOptions(stop, this.#config.exclude, { language });
     } catch (error) {
       console.error("buseta:", error);
-      this.#options.set(key, { error: "無法載入班次，請稍後再試。" });
+      options = { error: strings(language).busesFailed };
     }
+    // A list in the old language is dropped: the language change already cleared it.
+    if (language !== this.#language) return;
+    this.#options.set(key, options);
     this.#renderStops();
   }
 
@@ -435,6 +496,11 @@ class BusetaCardEditor extends HTMLElement {
         return this.#setNumber("leave_minutes", input, 0);
       case "scheme":
         return this.#setSetting("color_scheme", input.value);
+      case "language":
+        this.#setSetting("language", input.value);
+        // Switching to `auto` changes nothing on screen when HA is already in that language.
+        if (this.#chosenLanguage !== this.#language) this.#changeLanguage();
+        return;
       case "width":
         return this.#setGrid("columns", input, MIN_COLUMNS);
       case "height":

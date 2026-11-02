@@ -15,6 +15,7 @@ const {
   servesStop,
   stopUrls,
 } = await import(`./buseta.js${version}`);
+const { DEFAULT_LANGUAGE, localText, strings } = await import(`./buseta-i18n.js${version}`);
 
 const BOUNDS = { O: "outbound", I: "inbound" };
 const METRES_PER_DEGREE = 111320;
@@ -63,19 +64,20 @@ function mergeStopIds(lists) {
   return merged;
 }
 
-async function ctbDirection(fetchFn, route, dir, destination) {
+async function ctbDirection(fetchFn, route, dir, label) {
   const stops = await getData(fetchFn, `${CTB_API}/route-stop/ctb/${route}/${BOUNDS[dir]}`);
-  return { label: `往 ${destination}`, dir, stopIds: mergeStopIds([inRouteOrder(stops)]) };
+  return { label, dir, stopIds: mergeStopIds([inRouteOrder(stops)]) };
 }
 
 // The whole Citybus route list takes up to 15 seconds, so look up one route instead.
-async function loadCtbRoute(input, fetchFn) {
+async function loadCtbRoute(input, fetchFn, language) {
   const route = encodeURIComponent(input);
   const info = await getData(fetchFn, `${CTB_API}/route/ctb/${route}`);
   if (!info.route) return null;
+  const { towards } = strings(language);
   const all = await Promise.all([
-    ctbDirection(fetchFn, route, "O", info.dest_tc),
-    ctbDirection(fetchFn, route, "I", info.orig_tc),
+    ctbDirection(fetchFn, route, "O", towards(localText(info, "dest", language))),
+    ctbDirection(fetchFn, route, "I", towards(localText(info, "orig", language))),
   ]);
   const directions = all.filter(({ stopIds }) => stopIds.length);
   return directions.length ? { route: info.route, directions } : null;
@@ -84,8 +86,9 @@ async function loadCtbRoute(input, fetchFn) {
 // KMB lists a route once per service_type. Variants going to one place are one direction
 // to a rider, but the ETA API reports each bus under every variant it could be, so a bound
 // with several destinations needs service_type to tell them apart.
-async function kmbDirection(fetchFn, variants, splitBound) {
-  const [{ route, bound, dest_tc: destination }] = variants;
+async function kmbDirection(fetchFn, variants, splitBound, language) {
+  const [first] = variants;
+  const { route, bound } = first;
   const lists = await Promise.all(
     variants.map(async ({ service_type }) => ({
       service_type,
@@ -95,15 +98,15 @@ async function kmbDirection(fetchFn, variants, splitBound) {
     })),
   );
   return {
-    label: `往 ${destination}`,
-    origin: variants[0].orig_tc,
+    label: strings(language).towards(localText(first, "dest", language)),
+    origin: localText(first, "orig", language),
     dir: bound,
     stopIds: mergeStopIds(lists.map(({ stopIds }) => stopIds)),
     ...(splitBound && { variants: lists.filter(({ stopIds }) => stopIds.length) }),
   };
 }
 
-async function loadKmbRoute(route, fetchFn) {
+async function loadKmbRoute(route, fetchFn, language) {
   const all = (await loadKmbRoutes(fetchFn)).filter((item) => item.route === route);
   const groups = new Map();
   for (const item of all) {
@@ -113,39 +116,54 @@ async function loadKmbRoute(route, fetchFn) {
   const groupsInBound = ([{ bound }]) =>
     [...groups.values()].filter(([other]) => other.bound === bound).length;
   const loaded = await Promise.all(
-    [...groups.values()].map((group) => kmbDirection(fetchFn, group, groupsInBound(group) > 1)),
+    [...groups.values()].map((group) =>
+      kmbDirection(fetchFn, group, groupsInBound(group) > 1, language),
+    ),
   );
   const found = loaded.filter(({ stopIds }) => stopIds.length);
   const directions = found.map(({ origin, ...direction }) => {
     const shared = found.filter(({ label }) => label === direction.label).length > 1;
-    return shared ? { ...direction, label: `${direction.label}（由 ${origin} 開出）` } : direction;
+    const label = `${direction.label}${strings(language).from(origin)}`;
+    return shared ? { ...direction, label } : direction;
   });
   return directions.length ? { route, directions } : null;
 }
 
 // Gives { route, directions: [{ label, dir, stopIds }] }, or null if there is no such route.
-export function loadRoute(operator, input, { fetchFn = fetch } = {}) {
+// Labels are in `language`, and are saved with a route as it is added.
+export function loadRoute(
+  operator,
+  input,
+  { fetchFn = fetch, language = DEFAULT_LANGUAGE } = {},
+) {
   const route = input.trim().toUpperCase();
-  return operator === "kmb" ? loadKmbRoute(route, fetchFn) : loadCtbRoute(route, fetchFn);
+  const load = operator === "kmb" ? loadKmbRoute : loadCtbRoute;
+  return load(route, fetchFn, language);
 }
 
-const stopChoice = (stop_id, { name_tc: name, lat, long }) => ({
+const stopChoice = (stop_id, stop, language) => ({
   stop_id,
-  name: displayName(name),
-  lat,
-  long,
+  name: displayName(localText(stop, "name", language)),
+  lat: stop.lat,
+  long: stop.long,
 });
 
-export async function loadRouteStops(operator, stopIds, { fetchFn = fetch } = {}) {
+export async function loadRouteStops(
+  operator,
+  stopIds,
+  { fetchFn = fetch, language = DEFAULT_LANGUAGE } = {},
+) {
   if (operator === "kmb") {
     const stops = new Map((await loadKmbStops(fetchFn)).map((stop) => [stop.stop, stop]));
-    return stopIds.filter((id) => stops.has(id)).map((id) => stopChoice(id, stops.get(id)));
+    return stopIds
+      .filter((id) => stops.has(id))
+      .map((id) => stopChoice(id, stops.get(id), language));
   }
   // Each Citybus stop is its own request, so one failure only leaves that stop out.
   const failures = [];
   const stops = await mapLimited(stopIds, (id) =>
     getData(fetchFn, `${CTB_API}/stop/${id}`)
-      .then((stop) => stopChoice(id, stop))
+      .then((stop) => stopChoice(id, stop, language))
       .catch((error) => void failures.push(error)),
   );
   const found = stops.filter(Boolean);
@@ -158,17 +176,22 @@ export function routeEntry(route, { label, dir, variants }, stopId) {
   return { route, dir, ...(variant && { service_type: variant.service_type }), label };
 }
 
-const directionLabel = (entry) => entry.label ?? entry.dir ?? "全部方向";
+// A label is saved in the language in use when the route was added.
+const directionLabel = (entry, language) =>
+  entry.label ?? entry.dir ?? strings(language).allDirections;
 
-export const routeLabel = (entry) => `${routeName(entry)} ${directionLabel(entry)}`;
+export const routeLabel = (entry, language = DEFAULT_LANGUAGE) =>
+  `${routeName(entry)} ${directionLabel(entry, language)}`;
 
 // `index` and `routeIndex` give the row's place in the config, as removeRoute takes them.
-function addedRows({ operator, name: stop, routes }, index) {
-  if (!routes) return [{ operator, route: "全部路線", direction: "", stop, index }];
+function addedRows({ operator, name: stop, routes }, index, language) {
+  if (!routes) {
+    return [{ operator, route: strings(language).allRoutes, direction: "", stop, index }];
+  }
   return routes.map((entry, routeIndex) => ({
     operator,
     route: routeName(entry),
-    direction: directionLabel(entry),
+    direction: directionLabel(entry, language),
     stop,
     index,
     routeIndex,
@@ -176,46 +199,56 @@ function addedRows({ operator, name: stop, routes }, index) {
 }
 
 // What the editor lists as added, by operator, with rows in route, direction, stop order.
-export function addedRoutes(stops) {
+export function addedRoutes(stops, language = DEFAULT_LANGUAGE) {
   const rows = stops
-    .flatMap(addedRows)
+    .flatMap((stop, index) => addedRows(stop, index, language))
     .sort(
       (a, b) =>
         compareRoutes(a.route, b.route) ||
         a.direction.localeCompare(b.direction) ||
         a.stop.localeCompare(b.stop),
     );
-  return Object.keys(OPERATORS)
-    .map((operator) => ({ operator, rows: rows.filter((row) => row.operator === operator) }))
-    .filter((group) => group.rows.length);
+  return OPERATORS.map((operator) => ({
+    operator,
+    rows: rows.filter((row) => row.operator === operator),
+  })).filter((group) => group.rows.length);
 }
 
 // The routes a stop serves, read from its ETA records. Rules already hiding a route at
 // this stop stay listed, so they can be turned off while the API has no data for them.
-export function stopOptions(stop, records, exclude = []) {
+// `destination` is the Traditional Chinese text rules match on, and `name` is for display.
+export function stopOptions(stop, records, exclude = [], language = DEFAULT_LANGUAGE) {
   const options = new Map();
-  const add = (route, dir, destination, serviceType) => {
+  const add = (route, dir, destination, name, serviceType) => {
     const key = `${route}|${destination}`;
     if (options.has(key)) return;
     const variant = serviceType === undefined ? {} : { service_type: serviceType };
-    options.set(key, { route, dir, destination, ...variant });
+    options.set(key, { route, dir, destination, name, ...variant });
   };
-  for (const { route, dir, dest_tc: destination, service_type: serviceType } of records) {
-    if (destination) add(route, dir, destination, serviceType);
+  for (const record of records) {
+    const { route, dir, dest_tc: destination, service_type: serviceType } = record;
+    const name = localText(record, "dest", language);
+    if (destination) add(route, dir, destination, name, serviceType);
   }
   for (const rule of exclude) {
     const listed = rule.stop_id === stop.stop_id && rule.route !== undefined && rule.destination;
-    if (listed) add(String(rule.route), rule.dir, rule.destination, rule.service_type);
+    if (listed) {
+      add(String(rule.route), rule.dir, rule.destination, rule.destination, rule.service_type);
+    }
   }
   return [...options.values()].sort(
-    (a, b) =>
-      compareRoutes(a.route, b.route) || a.destination.localeCompare(b.destination),
+    (a, b) => compareRoutes(a.route, b.route) || a.name.localeCompare(b.name),
   );
 }
 
-export async function loadStopOptions(stop, exclude, { fetchFn = fetch } = {}) {
+export async function loadStopOptions(
+  stop,
+  exclude,
+  { fetchFn = fetch, language = DEFAULT_LANGUAGE } = {},
+) {
   const records = await Promise.all(stopUrls(stop).map((url) => getData(fetchFn, url)));
-  return stopOptions(stop, records.flat().filter((raw) => servesStop(raw, stop)), exclude);
+  const served = records.flat().filter((raw) => servesStop(raw, stop));
+  return stopOptions(stop, served, exclude, language);
 }
 
 const optionRow = (option, stop) => ({
