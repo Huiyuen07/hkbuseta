@@ -6,7 +6,7 @@ import {
   displayName,
   fetchRows,
   getData,
-  groupRows,
+  buildLanes,
   mapLimited,
   matchesRule,
   selectRows,
@@ -367,10 +367,6 @@ test("toRow treats a blank or other remark as a live departure", () => {
   assert.equal(toRow(missing, KMB_STOP, NOW).scheduled, false);
 });
 
-const STOPS = [
-  { operator: "kmb", stop_id: "S1" },
-  { operator: "kmb", stop_id: "S2" },
-];
 const bus = (fields) => ({
   operator: "kmb",
   stopId: "S1",
@@ -381,61 +377,87 @@ const bus = (fields) => ({
   scheduled: false,
   ...fields,
 });
-const group = (rows, leave = 5, stops = STOPS) => groupRows(rows, { stops, leave_minutes: leave });
+const lanes = (rows, leave = 5) => buildLanes(rows, { leave_minutes: leave });
 
 test("departures of a route share a lane in arrival order", () => {
   const rows = [bus({ remainingMinutes: 3 }), bus({ remainingMinutes: 9 })];
-  const [{ lanes }] = group(rows);
-  assert.equal(lanes.length, 1);
-  assert.deepEqual(lanes[0].departures.map((item) => item.minutes), [3, 9]);
+  const board = lanes(rows);
+  assert.equal(board.length, 1);
+  assert.deepEqual(board[0].departures.map((item) => item.minutes), [3, 9]);
 });
 
 test("a route splits into two lanes when destinations differ", () => {
   const rows = [bus({ destination: "X" }), bus({ destination: "Y" })];
-  assert.deepEqual(group(rows)[0].lanes.map((lane) => lane.destination), ["X", "Y"]);
+  assert.deepEqual(lanes(rows).map((lane) => lane.destination), ["X", "Y"]);
 });
 
 test("departures inside the leaving time may be missed, and the first after it is next", () => {
   const rows = [3, 5, 6, 9].map((remainingMinutes) => bus({ remainingMinutes }));
-  const { departures } = group(rows)[0].lanes[0];
+  const { departures } = lanes(rows)[0];
   assert.deepEqual(departures.map((item) => item.status), ["miss", "miss", "next", "later"]);
 });
 
 test("a leaving time of zero marks nothing as missed", () => {
-  const { departures } = group([bus({ remainingMinutes: 1 })], 0)[0].lanes[0];
+  const { departures } = lanes([bus({ remainingMinutes: 1 })], 0)[0];
   assert.equal(departures[0].status, "next");
 });
 
 test("a scheduled departure stays marked in its lane", () => {
-  assert.equal(group([bus({ scheduled: true })])[0].lanes[0].departures[0].scheduled, true);
+  assert.equal(lanes([bus({ scheduled: true })])[0].departures[0].scheduled, true);
 });
 
-test("stops keep the config order whichever bus comes first", () => {
+test("lanes from every stop share one list in arrival order", () => {
   const rows = [
-    bus({ stopId: "S2", stopName: "Two", remainingMinutes: 1 }),
+    bus({ stopId: "S1", stopName: "One", route: "1", remainingMinutes: 9 }),
+    bus({ stopId: "S2", stopName: "Two", route: "2", remainingMinutes: 1 }),
+  ];
+  assert.deepEqual(
+    lanes(rows).map(({ stop, route }) => [stop, route]),
+    [["Two", "2"], ["One", "1"]],
+  );
+});
+
+test("the same route at two stops gets a lane at each", () => {
+  const rows = [
     bus({ stopId: "S1", stopName: "One", remainingMinutes: 9 }),
+    bus({ stopId: "S2", stopName: "Two", remainingMinutes: 4 }),
   ];
-  assert.deepEqual(group(rows).map((item) => item.name), ["One", "Two"]);
+  assert.deepEqual(lanes(rows).map(({ stop }) => stop), ["Two", "One"]);
 });
 
-test("lanes are ordered by route number, not by who arrives first", () => {
-  const rows = ["68X", "10", "2"].map((route, index) => bus({ route, remainingMinutes: index + 6 }));
-  assert.deepEqual(group(rows)[0].lanes.map((lane) => lane.route), ["2", "10", "68X"]);
-});
-
-test("stops with the same name appear as one group", () => {
+test("lanes are ordered by their soonest bus", () => {
   const rows = [
-    bus({ stopId: "S1", route: "1" }),
-    bus({ stopId: "S2", route: "2", stopName: "One" }),
+    bus({ route: "2", remainingMinutes: 12 }),
+    bus({ route: "10", remainingMinutes: 7 }),
+    bus({ route: "68X", remainingMinutes: 9 }),
+    bus({ route: "2", remainingMinutes: 4 }),
   ];
-  const groups = group(rows);
-  assert.equal(groups.length, 1);
-  assert.deepEqual(groups[0].lanes.map((lane) => lane.route), ["1", "2"]);
+  assert.deepEqual(lanes(rows).map((lane) => lane.route), ["2", "10", "68X"]);
+});
+
+test("a bus inside the leaving time still puts its lane first", () => {
+  const rows = [bus({ route: "1", remainingMinutes: 8 }), bus({ route: "9", remainingMinutes: 2 })];
+  assert.deepEqual(lanes(rows).map((lane) => lane.route), ["9", "1"]);
+});
+
+test("lanes due at the same minute fall back on route number", () => {
+  const rows = ["68X", "10", "2"].map((route) => bus({ route, remainingMinutes: 6 }));
+  assert.deepEqual(lanes(rows).map((lane) => lane.route), ["2", "10", "68X"]);
+});
+
+test("stops with the same name share their lanes", () => {
+  const rows = [
+    bus({ stopId: "S1", remainingMinutes: 3 }),
+    bus({ stopId: "S2", stopName: "One", remainingMinutes: 7 }),
+  ];
+  const board = lanes(rows);
+  assert.equal(board.length, 1);
+  assert.deepEqual(board[0].departures.map((item) => item.minutes), [3, 7]);
 });
 
 test("stops whose names failed to load are not merged", () => {
   const rows = [bus({ stopId: "S1", stopName: "" }), bus({ stopId: "S2", stopName: "" })];
-  assert.equal(group(rows).length, 2);
+  assert.equal(lanes(rows).length, 2);
 });
 
 test("the axis labels sit on round minutes", () => {
@@ -450,7 +472,7 @@ test("the next bus in a lane is the soonest, even across stops that share a name
     bus({ stopId: "S2", remainingMinutes: 8 }),
     bus({ stopId: "S1", remainingMinutes: 20 }),
   ];
-  const { departures } = group(rows)[0].lanes[0];
+  const { departures } = lanes(rows)[0];
   assert.deepEqual(departures.map((item) => item.minutes), [8, 20]);
   assert.deepEqual(departures.map((item) => item.status), ["next", "later"]);
 });
@@ -468,11 +490,11 @@ test("a lane lists each remark once and leaves out the scheduled mark", () => {
     bus({ remainingMinutes: 15, remark: "Scheduled Bus", scheduled: true }),
     bus({ remainingMinutes: 18, remark: "" }),
   ];
-  assert.deepEqual(group(rows)[0].lanes[0].notes, ["只限星期一", "特別班次"]);
+  assert.deepEqual(lanes(rows)[0].notes, ["只限星期一", "特別班次"]);
 });
 
 test("a lane with no remarks has no notes", () => {
-  assert.deepEqual(group([bus()])[0].lanes[0].notes, []);
+  assert.deepEqual(lanes([bus()])[0].notes, []);
 });
 
 const rowsOf = (minutes, gap) =>
@@ -772,10 +794,9 @@ test("an English board names stops in English and still joins one stop across op
   ];
   const config = validateConfig({ stops, language: "en" });
   const { rows } = await fetchRows(config, { fetchFn, now: () => NOW });
-  const groups = groupRows(rows, config);
-  assert.equal(groups.length, 1);
-  assert.equal(groups[0].name, "PIER");
-  assert.deepEqual(groups[0].lanes.map(({ destination }) => destination), ["East", "KOWLOON"]);
+  const board = buildLanes(rows, config);
+  assert.deepEqual(board.map(({ stop }) => stop), ["PIER", "PIER"]);
+  assert.deepEqual(board.map(({ destination }) => destination), ["East", "KOWLOON"]);
 });
 
 test("validateConfig accepts following HA's language", () => {

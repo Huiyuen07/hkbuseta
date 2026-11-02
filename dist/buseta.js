@@ -155,13 +155,21 @@ export function selectRows(rows, config) {
 
 export const compareRoutes = (a, b) => a.localeCompare(b, undefined, { numeric: true });
 
-// Groups by name because KMB and Citybus give one physical stop different IDs. The
-// Traditional Chinese name is used in every language: KMB writes English names in capitals
-// and Citybus does not. A name that failed to load is blank, so it falls back to the ID.
-const groupKey = (row) => (row.stopGroup ?? row.stopName) || `${row.operator}:${row.stopId}`;
+// Lanes join by stop name because KMB and Citybus give one physical stop different IDs.
+// The Traditional Chinese name is used in every language: KMB writes English names in
+// capitals and Citybus does not. A name that failed to load is blank, so it falls back to
+// the ID.
+const stopKey = (row) => (row.stopGroup ?? row.stopName) || `${row.operator}:${row.stopId}`;
 
+// The soonest bus comes first, counting buses inside the leaving time. Ties fall back on
+// the route number.
 function compareLanes(a, b) {
-  return compareRoutes(a.route, b.route) || a.destination.localeCompare(b.destination);
+  return (
+    a.departures[0].minutes - b.departures[0].minutes ||
+    compareRoutes(a.route, b.route) ||
+    a.destination.localeCompare(b.destination) ||
+    (a.stop ?? "").localeCompare(b.stop ?? "")
+  );
 }
 
 function laneDepartures(rows, leaveMinutes) {
@@ -179,33 +187,33 @@ const laneNotes = (rows) => [
   ...new Set(rows.filter(({ remark, scheduled }) => remark && !scheduled).map(({ remark }) => remark)),
 ];
 
-// The order of stops and lanes ignores arrival time, so nothing on a wall panel moves
-// about between refreshes.
-export function groupRows(rows, { stops, leave_minutes: leaveMinutes }) {
+// One lane per stop, route and destination, all stops together in arrival order. A stop
+// shared by two operators takes its name from the one first in the config, so its lanes
+// all read the same.
+export function buildLanes(rows, { stops = [], leave_minutes: leaveMinutes }) {
   const configOrder = (row) =>
     stops.findIndex((stop) => stop.operator === row.operator && stop.stop_id === row.stopId);
-  const groups = new Map();
+  const names = new Map();
   for (const row of [...rows].sort((a, b) => configOrder(a) - configOrder(b))) {
-    const key = groupKey(row);
-    if (!groups.has(key)) groups.set(key, { name: row.stopName, lanes: new Map() });
-    const { lanes } = groups.get(key);
-    const laneKey = [row.operator, row.route, row.destination].join("|");
-    if (!lanes.has(laneKey)) {
-      const { operator, route, destination, destinationName = destination } = row;
-      lanes.set(laneKey, { operator, route, destination: destinationName, rows: [] });
-    }
-    lanes.get(laneKey).rows.push(row);
+    if (!names.has(stopKey(row))) names.set(stopKey(row), row.stopName);
   }
-  return [...groups.values()].map(({ name, lanes }) => ({
-    name,
-    lanes: [...lanes.values()]
-      .map(({ rows: laneRows, ...lane }) => ({
-        ...lane,
-        departures: laneDepartures(laneRows, leaveMinutes),
-        notes: laneNotes(laneRows),
-      }))
-      .sort(compareLanes),
-  }));
+  const lanes = new Map();
+  for (const row of rows) {
+    const key = [stopKey(row), row.operator, row.route, row.destination].join("|");
+    if (!lanes.has(key)) {
+      const { operator, route, destination, destinationName = destination } = row;
+      const stop = names.get(stopKey(row));
+      lanes.set(key, { stop, operator, route, destination: destinationName, rows: [] });
+    }
+    lanes.get(key).rows.push(row);
+  }
+  return [...lanes.values()]
+    .map(({ rows: laneRows, ...lane }) => ({
+      ...lane,
+      departures: laneDepartures(laneRows, leaveMinutes),
+      notes: laneNotes(laneRows),
+    }))
+    .sort(compareLanes);
 }
 
 // Departures closer than `gap` minutes would cover each other's numbers, so each run of

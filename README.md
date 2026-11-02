@@ -34,6 +34,8 @@ HACS 會自動加入資源，版本更新也在 HACS 完成。如果資源是用
 
 喜歡寫 YAML 的話，按編輯視窗左下角的「使用文字編輯器」，內容見 `examples/lovelace-card.yaml`。兩者讀寫同一份設定。
 
+卡片上所有站點的路線排在一起，最快到站的排最前，出門時間內的班次也計算在內。卡片有多於一個站點時，站名會顯示在目的地下方。
+
 ### 設定（卡片 YAML）
 
 | 欄位 | 說明 | 預設值 |
@@ -118,6 +120,8 @@ After an update, add or change `?v=` in the resource URL (`deploy.sh` prints the
 Add a card to your dashboard, search for "Bus ETA", and set it up in the edit dialog. You don't need stop IDs.
 
 To write YAML instead, select the text editor option at the bottom left of the dialog. See `examples/lovelace-card.yaml`. Both read and write the same config.
+
+Routes from all stops on the card share one list, with the soonest bus first, counting buses inside the leaving time. When the card has more than one stop, the stop name appears under the destination.
 
 ### Configuration (card YAML)
 

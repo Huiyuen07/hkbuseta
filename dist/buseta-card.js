@@ -2,7 +2,7 @@
 
 // Passing on the resource's ?v= keeps the other modules in step with the card.
 const version = new URL(import.meta.url).search;
-const { axisTicks, escapeHtml, fetchRows, groupRows, staggerDepartures, validateConfig } =
+const { axisTicks, buildLanes, escapeHtml, fetchRows, staggerDepartures, validateConfig } =
   await import(`./buseta.js${version}`);
 const { LANGUAGES, resolveLanguage, strings } = await import(`./buseta-i18n.js${version}`);
 
@@ -109,7 +109,6 @@ const STYLE = `
   }
   .tick.now { color: var(--ink); transform: none; }
   .tick.leave { color: var(--ink); font-weight: 700; }
-  .stop { font-size: 13px; font-weight: 700; margin: 0; padding: 6px 0 2px; position: relative; }
   .lane {
     align-items: center;
     display: grid;
@@ -129,7 +128,10 @@ const STYLE = `
   }
   .kmb { background: var(--kmb); color: var(--kmb-ink); }
   .ctb { background: var(--ctb); color: var(--ctb-ink); }
-  .destination { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .names { display: flex; flex-direction: column; min-width: 0; }
+  .destination, .stop { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .destination { font-size: 13px; line-height: 16px; }
+  .stop { color: var(--soft); font-size: 11px; line-height: 13px; }
   .track { height: var(--lane); position: relative; }
   .rail {
     background: var(--rail);
@@ -195,10 +197,13 @@ const STYLE = `
   @container (max-width: ${NARROW_CARD}px) {
     .chart { --label: ${NARROW_LABEL_WIDTH}px; --lane: 44px; --shift: 11px; }
     .who { align-items: flex-start; flex-direction: column; gap: 2px; }
-    .destination { font-size: 11px; line-height: 13px; max-width: 62px; }
+    .names { max-width: 62px; }
+    .destination { font-size: 11px; line-height: 13px; }
+    .chart.stops { --lane: 54px; }
   }
 `;
 
+const showStops = (config) => config.stops.length > 1;
 const messageHtml = (text) => `<div class="message">${text}</div>`;
 const text = (config) => strings(config.language);
 
@@ -223,11 +228,15 @@ function dotGap(cardWidth, { max_minutes: max }) {
   return track > 0 ? (DOT_SPACING / track) * max : 0;
 }
 
-const laneHtml = ({ operator, route, destination, departures, notes }, config, gap) => `
+// The stop goes under the destination only when the card has more than one stop.
+const laneHtml = ({ stop, operator, route, destination, departures, notes }, config, gap) => `
   <div class="lane">
     <div class="who">
       <span class="plate ${operator}">${escapeHtml(route)}</span>
-      <span class="destination">${escapeHtml(destination)}</span>
+      <span class="names">
+        <span class="destination">${escapeHtml(destination)}</span>
+        ${showStops(config) ? `<span class="stop">${escapeHtml(stop ?? "")}</span>` : ""}
+      </span>
     </div>
     <div class="track">
       <span class="rail"></span>
@@ -238,11 +247,6 @@ const laneHtml = ({ operator, route, destination, departures, notes }, config, g
   </div>
   ${notes.map((note) => `<div class="note">${escapeHtml(note)}</div>`).join("")}`;
 
-const groupHtml = ({ name, lanes }, config, gap) => `
-  <section>
-    <h3 class="stop">${escapeHtml(name)}</h3>
-    ${lanes.map((lane) => laneHtml(lane, config, gap)).join("")}
-  </section>`;
 
 // The width is the track's share of the chart once the padding and label column are gone.
 function bandHtml({ leave_minutes: leave, max_minutes: max }) {
@@ -272,8 +276,8 @@ function axisHtml(config) {
     </div>`;
 }
 
-const chartHtml = (groups, config, gap) =>
-  bandHtml(config) + axisHtml(config) + groups.map((group) => groupHtml(group, config, gap)).join("");
+const chartHtml = (lanes, config, gap) =>
+  bandHtml(config) + axisHtml(config) + lanes.map((lane) => laneHtml(lane, config, gap)).join("");
 
 const clock = (date) =>
   date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
@@ -353,7 +357,7 @@ class BusetaCard extends HTMLElement {
     root.innerHTML = `
       <style>${STYLE}</style>
       <ha-card class="scheme-${this.#config.color_scheme}" lang="${tag}"${header}>
-        <div class="scroll"><div class="chart"></div></div>
+        <div class="scroll"><div class="chart${showStops(config) ? " stops" : ""}"></div></div>
         <div class="foot"></div>
       </ha-card>`;
     this.#chart = root.querySelector(".chart");
@@ -405,11 +409,11 @@ class BusetaCard extends HTMLElement {
 
   #show(result) {
     const config = this.#config;
-    const groups = groupRows(result.rows, config);
+    const lanes = buildLanes(result.rows, config);
     const gap = dotGap(this.#chart.clientWidth, config);
     const t = text(config);
     const empty = messageHtml(result.allFailed ? t.failed : t.noBuses);
-    this.#chart.innerHTML = groups.length ? chartHtml(groups, config, gap) : empty;
+    this.#chart.innerHTML = lanes.length ? chartHtml(lanes, config, gap) : empty;
     if (!result.allFailed) this.#updated = new Date();
     this.#foot.innerHTML = footHtml(config, this.#updated, failureHtml(result, config));
   }

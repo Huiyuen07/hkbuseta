@@ -118,12 +118,25 @@ test("the editor lists stops by name, with no stop ID or rename box", async () =
   assert.doesNotMatch(list, /<input/);
 });
 
-test("the card shows the stop, route and destination once it is on the page", async () => {
+test("the card shows the route and destination once it is on the page", async () => {
   respondWith([k1(5)]);
   const card = await showCard();
-  assert.match(body(card), /Stop A/);
   assert.match(body(card), /K1/);
   assert.match(body(card), /Kowloon/);
+  card.disconnectedCallback();
+});
+
+test("a card with one stop leaves the stop name out of its lanes", async () => {
+  respondWith([k1(5)]);
+  const card = await showCard();
+  assert.doesNotMatch(body(card), /Stop A/);
+  card.disconnectedCallback();
+});
+
+test("a card with several stops names the stop under each destination", async () => {
+  respondWith([k1(5)]);
+  const card = await showCard({ stops: [STOP, { operator: "kmb", stop_id: "KMB9" }] });
+  assert.match(body(card), /<span class="stop">Stop A<\/span>/);
   card.disconnectedCallback();
 });
 
