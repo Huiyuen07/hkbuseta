@@ -16,10 +16,13 @@
 
 #### 方法一：HACS（建議）
 
-1. 在 HACS 右上角選單選「Custom repositories」，Repository 填 `https://github.com/Huiyuen07/hkbuseta`，Type 選「Dashboard」。
-2. 在 HACS 搜尋「Bus ETA」並下載，然後重新整理瀏覽器。(有待HACS審批)
+[![在 HACS 開啟](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Huiyuen07&repository=hkbuseta&category=plugin)
+
+在 HACS 搜尋「Bus ETA」並下載，然後重新整理瀏覽器。
 
 HACS 會自動加入資源，版本更新也在 HACS 完成。如果資源是用 YAML 管理，要自行加入 `/hacsfiles/hkbuseta/buseta-card.js`。
+
+搜尋不到的話（例如 HACS 版本較舊），可以先在 HACS 右上角選單選「Custom repositories」，Repository 填 `https://github.com/Huiyuen07/hkbuseta`，Type 選「Dashboard」，再搜尋。
 
 #### 方法二：手動下載
 
@@ -103,10 +106,13 @@ Data comes from the government's open data APIs.
 
 #### Option 1: HACS (recommended)
 
-1. In HACS, open the top-right menu and choose Custom repositories. Enter `https://github.com/Huiyuen07/hkbuseta` as the repository and choose Dashboard as the type.
-2. Search for "Bus ETA" in HACS, download it, then refresh your browser. (Pending HACS approval)
+[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Huiyuen07&repository=hkbuseta&category=plugin)
+
+Search for "Bus ETA" in HACS, download it, then refresh your browser.
 
 HACS adds the resource for you and handles updates. If you manage resources in YAML, add `/hacsfiles/hkbuseta/buseta-card.js` yourself.
+
+If the search finds nothing (for example, on an older HACS), open the top-right menu in HACS, choose Custom repositories, enter `https://github.com/Huiyuen07/hkbuseta` as the repository and Dashboard as the type, then search again.
 
 #### Option 2: Manual download
 
